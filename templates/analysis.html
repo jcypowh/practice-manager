@@ -1,0 +1,47 @@
+{% extends 'base.html' %}
+{% block title %}Analysis{% endblock %}
+{% block content %}
+<h3>Analysis</h3>
+<p class="text-muted">Rule-based breakdown over the trailing {{ n_months }} month(s) (published months preferred; falls back to all non-archived months if fewer than that many have been published yet).</p>
+
+<h5>Flags</h5>
+{% if flags %}
+<ul class="list-group mb-4">
+  {% for f in flags %}
+  <li class="list-group-item list-group-item-{{ 'warning' if f.type == 'under-utilized' else 'info' }}">
+    <strong>{{ f.site }}</strong> — {{ f.type }}: {{ f.detail }}
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<p class="text-muted">No flags at current thresholds.</p>
+{% endif %}
+
+<h5>Per-site breakdown</h5>
+<table class="table table-sm bg-white">
+  <thead><tr><th>Site</th><th>Sessions</th><th>Avg/month</th><th>Total $</th></tr></thead>
+  <tbody>
+    {% for b in breakdown %}
+    <tr><td>{{ b.site }}</td><td>{{ b.sessions }}</td><td>{{ b.avg_per_month }}</td><td>${{ '%.2f'|format(b.total_value) }}</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<h5>Weekly totals</h5>
+<table class="table table-sm bg-white">
+  <thead><tr><th>Week starting</th><th>Sessions</th><th>Total $</th></tr></thead>
+  <tbody>
+    {% for wk, v in weekly %}
+    <tr><td>{{ wk }}</td><td>{{ v.sessions }}</td><td>${{ '%.2f'|format(v.value) }}</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<h5 class="mt-4">Claude narrative analysis</h5>
+<form method="post" action="{{ url_for('analysis_claude') }}" class="mb-2">
+  <button class="btn btn-primary btn-sm">Generate narrative analysis with Claude</button>
+</form>
+{% if narrative %}
+<div class="card"><div class="card-body" style="white-space: pre-wrap;">{{ narrative }}</div></div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,20 @@
+{% extends 'base.html' %}
+{% block title %}Import{% endblock %}
+{% block content %}
+<h3>Import monthly schedule</h3>
+<p class="text-muted">Upload the workbook's "Schedule List" sheet format (Date, Day, Session, Site, Activity). Calendar-grid-only files (no "Schedule List" tab) will be rejected with a clear message.</p>
+<form method="post" enctype="multipart/form-data" class="mb-4">
+  <div class="mb-2"><input type="file" name="file" class="form-control" accept=".xlsx" required></div>
+  <button class="btn btn-primary" type="submit">Import</button>
+</form>
+
+<h5>Recent imports</h5>
+<table class="table table-sm bg-white">
+  <thead><tr><th>File</th><th>Month</th><th>Inserted</th><th>Updated</th><th>When</th></tr></thead>
+  <tbody>
+    {% for log in logs %}
+    <tr><td>{{ log.original_filename }}</td><td>{{ log.month_label }}</td><td>{{ log.rows_inserted }}</td><td>{{ log.rows_updated }}</td><td>{{ log.imported_at }}</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

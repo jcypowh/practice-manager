@@ -1,0 +1,241 @@
+{% extends 'base.html' %}
+{% block title %}Board - {{ month.label }}{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+  <div>
+    <h3 class="mb-0">{{ month.label }}
+      {% if month.source == 'claude_generated' %}<span class="badge bg-info text-dark">Drafted by Claude — review before publishing</span>{% endif %}
+      {% if month.status == 'published' %}<span class="badge bg-success">Published</span>{% endif %}
+      {% if month.status == 'archived' %}<span class="badge bg-secondary">Archived</span>{% endif %}
+      <span class="badge bg-dark">Month total: ${{ '%.0f'|format(month_total) }}</span>
+    </h3>
+  </div>
+  <div class="d-flex gap-2 align-items-center">
+    <select class="form-select form-select-sm" onchange="location.href='/board/'+this.value">
+      {% for m in all_months %}
+        <option value="{{ m.id }}" {% if m.id == month.id %}selected{% endif %}>{{ m.label }}{% if m.status != 'draft' %} ({{ m.status }}){% endif %}</option>
+      {% endfor %}
+    </select>
+    <button class="btn btn-sm btn-primary" id="addBlockBtn"><i class="fa-solid fa-plus"></i> Add block</button>
+  </div>
+</div>
+
+{% if pending %}
+<div class="alert alert-warning d-flex justify-content-between align-items-center flex-wrap gap-2">
+  <span><i class="fa-solid fa-triangle-exclamation"></i> You have unsaved changes on {{ month.label }}.</span>
+  <div class="d-flex gap-2">
+    <form method="post" action="{{ url_for('undo_board', month_id=month.id) }}" onsubmit="return confirm('Undo all changes since your last save on {{ month.label }}?');">
+      <button class="btn btn-sm btn-outline-secondary" type="submit">Undo</button>
+    </form>
+    <form method="post" action="{{ url_for('save_board', month_id=month.id) }}">
+      <button class="btn btn-sm btn-success" type="submit">Save changes</button>
+    </form>
+  </div>
+</div>
+{% endif %}
+
+{% macro block_box(b) %}
+<div class="block-box" data-id="{{ b.id }}" style="--box-color: {{ b.color }}"
+     data-location-id="{{ b.location_id }}" data-activity="{{ b.activity }}" data-slot="{{ b.slot }}"
+     data-current-value="{{ b.value_formula if b.value_formula else (b.value or 0) }}"
+     data-notes="{{ b.notes }}" data-label="{{ b.location_name }} - {{ b.activity }}">
+  <strong>{{ b.location_name }}</strong> {{ b.activity }} <span class="block-value">${{ '%.0f'|format(b.value or 0) }}</span>
+  {% if b.time_note %}<span class="block-time"><i class="fa-regular fa-clock"></i> {{ b.time_note }}</span>{% endif %}
+</div>
+{% endmacro %}
+
+{% if weeks %}
+<table class="board-table">
+  <thead>
+    <tr>
+      <th class="week-col">Week</th>
+      <th>Monday</th><th>Tuesday</th><th>Wednesday</th><th>Thursday</th><th>Friday</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for week in weeks %}
+    <tr>
+      <td class="week-col" rowspan="4">{{ week.label }}<br><small>{{ week.monday.strftime('%d %b') }}</small></td>
+      {% for day in week.days %}
+        <td class="day-date-cell">{{ day.day_name[:3] }} {{ day.date[-2:] }} <span class="day-total">${{ '%.0f'|format(day.total) }}</span></td>
+      {% endfor %}
+    </tr>
+    <tr>
+      {% for day in week.days %}
+        {% set allday_blocks = day.blocks | selectattr('slot', 'equalto', 'All day') | list %}
+        {% set am_blocks = day.blocks | selectattr('slot', 'equalto', 'AM') | list %}
+        {% set pm_blocks = day.blocks | selectattr('slot', 'equalto', 'PM') | list %}
+        {% if allday_blocks and not am_blocks and not pm_blocks %}
+        <td class="slot-cell slot-allday" rowspan="2" data-date="{{ day.date }}" data-slot="All day">
+          {% for b in allday_blocks %}{{ block_box(b) }}{% endfor %}
+        </td>
+        {% else %}
+        <td class="slot-cell" data-date="{{ day.date }}" data-slot="AM">
+          {% for b in am_blocks %}{{ block_box(b) }}{% endfor %}
+          {% for b in allday_blocks %}{{ block_box(b) }}{% endfor %}
+        </td>
+        {% endif %}
+      {% endfor %}
+    </tr>
+    <tr>
+      {% for day in week.days %}
+        {% set allday_blocks = day.blocks | selectattr('slot', 'equalto', 'All day') | list %}
+        {% set am_blocks = day.blocks | selectattr('slot', 'equalto', 'AM') | list %}
+        {% set pm_blocks = day.blocks | selectattr('slot', 'equalto', 'PM') | list %}
+        {% if not (allday_blocks and not am_blocks and not pm_blocks) %}
+        <td class="slot-cell" data-date="{{ day.date }}" data-slot="PM">
+          {% for b in pm_blocks %}{{ block_box(b) }}{% endfor %}
+        </td>
+        {% endif %}
+      {% endfor %}
+    </tr>
+    <tr>
+      <td colspan="5" class="week-total-cell">Week total: ${{ '%.0f'|format(week.total) }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="text-muted">No sessions in this month yet. Use Import or Add block.</p>
+{% endif %}
+
+<h5 class="mt-4"><i class="fa-solid fa-pause"></i> Hold tray <small class="text-muted">(parked sessions, not scheduled)</small></h5>
+<div class="hold-tray d-flex flex-wrap gap-2" id="hold-tray">
+  {% for b in holds %}
+    <div class="block-box" data-id="{{ b.id }}" style="--box-color: {{ b.color }}; min-width: 160px;"
+         data-location-id="{{ b.location_id }}" data-activity="{{ b.activity }}" data-slot="{{ b.slot }}"
+         data-current-value="{{ b.value_formula if b.value_formula else (b.value or 0) }}"
+         data-notes="{{ b.notes }}" data-label="{{ b.location_name }} - {{ b.activity }}">
+      <strong>{{ b.location_name }}</strong> {{ b.activity }} <small>{{ b.date }} {{ b.slot }}</small>
+    </div>
+  {% endfor %}
+  {% if not holds %}<span class="text-muted small">Drag a box here to put it on hold.</span>{% endif %}
+</div>
+
+<!-- Add block modal -->
+<div class="modal fade" id="addBlockModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header"><h5 class="modal-title">Add block</h5><button class="btn-close" data-bs-dismiss="modal"></button></div>
+      <div class="modal-body">
+        <form id="addBlockForm">
+          <div class="mb-2"><label class="form-label">Date</label><input type="date" class="form-control" name="date" required></div>
+          <div class="mb-2"><label class="form-label">Slot</label>
+            <select class="form-select" name="slot"><option>AM</option><option>PM</option><option>All day</option></select>
+          </div>
+          <div class="mb-2"><label class="form-label">Site</label>
+            <select class="form-select" name="location_id">
+              {% for l in locations %}<option value="{{ l.id }}">{{ l.name }}</option>{% endfor %}
+            </select>
+          </div>
+          <div class="mb-2"><label class="form-label">Activity</label>
+            <select class="form-select" name="activity">
+              {% for a in activities %}<option value="{{ a }}">{{ a }}</option>{% endfor %}
+            </select>
+          </div>
+        </form>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-primary" id="addBlockSave">Add</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Edit block modal -->
+<div class="modal fade" id="editBlockModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header"><h5 class="modal-title" id="editBlockLabel">Edit block</h5><button class="btn-close" data-bs-dismiss="modal"></button></div>
+      <div class="modal-body">
+        <input type="hidden" id="editBlockId">
+        <input type="hidden" id="editBlockLocationId">
+        <input type="hidden" id="editBlockSlot">
+        <input type="hidden" id="editBlockOrigActivity">
+        <div class="mb-2">
+          <label class="form-label">Activity / category</label>
+          <input type="text" class="form-control" id="editBlockActivity">
+          <div class="form-text">Give this session its own name (e.g. "Evening Consult") to split it into its own priceable category, separate from the usual one at this site.</div>
+        </div>
+        <div class="mb-2">
+          <label class="form-label">Value ($, or a calculation e.g. <code>2300*0.75</code>)</label>
+          <input type="text" class="form-control" id="editBlockValue" placeholder="e.g. 2300*0.75">
+          <div class="form-text" id="editBlockValueHint">Applies to every session at this site + activity, in every month — not just this one.</div>
+        </div>
+        <div class="mb-2"><label class="form-label">Notes (this session only)</label>
+          <textarea class="form-control" id="editBlockNotes" rows="3"></textarea></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline-danger me-auto" id="editBlockDelete">Delete</button>
+        <button class="btn btn-primary" id="editBlockSave">Save</button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
+<script src="{{ url_for('static', filename='board.js') }}"></script>
+<script>
+const addBlockModal = new bootstrap.Modal(document.getElementById('addBlockModal'));
+const editBlockModal = new bootstrap.Modal(document.getElementById('editBlockModal'));
+
+document.getElementById('addBlockBtn').addEventListener('click', () => addBlockModal.show());
+
+document.getElementById('addBlockSave').addEventListener('click', () => {
+  const form = document.getElementById('addBlockForm');
+  const fd = new FormData(form);
+  fetch('/block/new', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({month_id: {{ month.id }}, date: fd.get('date'), slot: fd.get('slot'),
+                           location_id: fd.get('location_id'), activity: fd.get('activity')})
+  }).then(r => r.json()).then(res => { if (res.ok) location.reload(); else alert(res.error || 'Error'); });
+});
+
+document.addEventListener('click', (ev) => {
+  const box = ev.target.closest('.block-box');
+  if (!box) return;
+  document.getElementById('editBlockId').value = box.dataset.id;
+  document.getElementById('editBlockLocationId').value = box.dataset.locationId;
+  document.getElementById('editBlockSlot').value = box.dataset.slot;
+  document.getElementById('editBlockOrigActivity').value = box.dataset.activity;
+  document.getElementById('editBlockActivity').value = box.dataset.activity;
+  document.getElementById('editBlockValue').value = box.dataset.currentValue || '';
+  document.getElementById('editBlockNotes').value = box.dataset.notes || '';
+  document.getElementById('editBlockLabel').textContent = box.dataset.label || 'Edit block';
+  document.getElementById('editBlockValueHint').textContent = box.dataset.slot === 'All day'
+    ? 'Applies to every All-day session at this site + activity - priced separately from AM/PM sessions.'
+    : 'Applies to every AM/PM session at this site + activity, in every month - not just this one.';
+  editBlockModal.show();
+});
+document.getElementById('editBlockSave').addEventListener('click', () => {
+  const id = document.getElementById('editBlockId').value;
+  const locationId = document.getElementById('editBlockLocationId').value;
+  const slot = document.getElementById('editBlockSlot').value;
+  const origActivity = document.getElementById('editBlockOrigActivity').value;
+  const activity = document.getElementById('editBlockActivity').value.trim();
+  const value = document.getElementById('editBlockValue').value;
+  const notes = document.getElementById('editBlockNotes').value;
+
+  const steps = [];
+  if (activity && activity !== origActivity) {
+    steps.push(fetch(`/block/${id}/set-activity`, {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({activity: activity})}));
+  }
+  Promise.all(steps).then(() => Promise.all([
+    fetch('/location-rate/set-value', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({location_id: locationId, activity: activity || origActivity, slot: slot, value: value})}),
+    fetch(`/block/${id}/set-notes`, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({notes: notes})}),
+  ])).then(res => Promise.all(res.map(r => r.json()))).then(([valueRes, notesRes]) => {
+    if (!valueRes.ok) { alert(valueRes.error || 'Could not save value'); return; }
+    location.reload();
+  });
+});
+document.getElementById('editBlockDelete').addEventListener('click', () => {
+  const id = document.getElementById('editBlockId').value;
+  if (!confirm('Delete this block?')) return;
+  fetch(`/block/${id}/delete`, {method:'POST'}).then(() => location.reload());
+});
+</script>
+{% endblock %}

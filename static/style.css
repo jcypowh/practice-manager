@@ -1,0 +1,34 @@
+:root {
+  --primary: #1a5c3a;
+  --primary-hover: #12401f;
+  --accent: #2980b9;
+  --bg: #f0f4f8;
+  --color-cdd: #8e44ad;
+  --color-corporate: #e67e22;
+  --color-shore_own: #27ae60;
+  --color-scope: #2980b9;
+  --color-other: #95a5a6;
+  --hold-bg: #fff8e1;
+}
+body { background: var(--bg); }
+
+.board-table { width: 100%; border-collapse: collapse; table-layout: fixed; background: #fff; }
+.board-table th { font-size: .72rem; text-transform: uppercase; color: #666; background: #eef2f6; border: 1px solid #e3e8ee; padding: 4px 6px; }
+.board-table td { border: 1px solid #e3e8ee; padding: 2px; vertical-align: top; }
+.week-col { width: 64px; text-align: center; font-size: .72rem; font-weight: 700; color: #444; background: #eef2f6; vertical-align: middle !important; white-space: nowrap; }
+.week-col small { font-weight: 400; color: #888; }
+.day-date-cell { text-align: center; font-size: .68rem; font-weight: 600; color: #555; background: #f7f9fb; padding: 3px !important; }
+.day-total { font-weight: 400; color: #888; }
+.slot-cell { min-height: 26px; }
+.slot-allday { background: #fbfbfb; height: 100%; }
+.slot-allday .block-box { min-height: calc(100% - 4px); display: flex; flex-direction: column; justify-content: center; box-sizing: border-box; }
+.week-total-cell { text-align: right; font-size: .72rem; font-weight: 700; color: #444; background: #eef2f6; padding: 3px 8px !important; }
+
+.block-box { background: var(--box-color, #888); color: #fff; border-radius: 4px; padding: 2px 5px; margin-bottom: 2px; cursor: grab; font-size: .7rem; line-height: 1.3; }
+.block-value { opacity: .85; margin-left: 2px; }
+.block-time { display: block; font-size: .62rem; opacity: .85; }
+
+.hold-tray { background: var(--hold-bg); border: 2px dashed #d4a017; border-radius: 8px; padding: .5rem; min-height: 50px; }
+.hold-tray .block-box { min-width: 150px; font-size: .72rem; }
+.sortable-ghost { opacity: .4; }
+.color-swatch { width: 22px; height: 22px; border-radius: 4px; display: inline-block; vertical-align: middle; }

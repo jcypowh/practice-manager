@@ -1,0 +1,45 @@
+{% extends 'base.html' %}
+{% block title %}Locations{% endblock %}
+{% block content %}
+<h3>Locations</h3>
+{% for l in locations %}<form id="loc-form-{{ l.id }}" method="post" action="{{ url_for('update_location', loc_id=l.id) }}"></form>{% endfor %}
+<table class="table table-sm bg-white align-middle">
+  <thead><tr><th>Name</th><th>Category</th><th>Colour</th><th>AM $</th><th>PM $</th><th>All-day $</th><th>Active</th><th></th></tr></thead>
+  <tbody>
+    {% for l in locations %}
+    <tr>
+      <td><input form="loc-form-{{ l.id }}" class="form-control form-control-sm" name="name" value="{{ l.name }}"></td>
+      <td><select form="loc-form-{{ l.id }}" class="form-select form-select-sm" name="category">
+        {% for c in categories %}<option value="{{ c }}" {% if c == l.category %}selected{% endif %}>{{ c }}</option>{% endfor %}
+      </select></td>
+      <td><input form="loc-form-{{ l.id }}" type="color" class="form-control form-control-sm form-control-color" name="color" value="{{ l.color }}"></td>
+      <td><input form="loc-form-{{ l.id }}" type="number" step="0.01" class="form-control form-control-sm" name="default_am_value" value="{{ l.default_am_value }}"></td>
+      <td><input form="loc-form-{{ l.id }}" type="number" step="0.01" class="form-control form-control-sm" name="default_pm_value" value="{{ l.default_pm_value }}"></td>
+      <td><input form="loc-form-{{ l.id }}" type="number" step="0.01" class="form-control form-control-sm" name="default_allday_value" value="{{ l.default_allday_value }}"></td>
+      <td class="text-center"><input form="loc-form-{{ l.id }}" type="checkbox" name="active" {% if l.active %}checked{% endif %}></td>
+      <td><button form="loc-form-{{ l.id }}" class="btn btn-sm btn-outline-primary" type="submit">Save</button></td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<h4 class="mt-4">Site / activity colours &amp; values</h4>
+<p class="text-muted">One row per site+activity combination seen so far (auto-created on import). Blank colour inherits the site's base colour above. A value applies to <strong>every session</strong> at that site+activity, in every month. You can type a plain number or a calculation, e.g. <code>2300*0.75</code> or <code>2200-360</code>.</p>
+{% for r in rates %}<form id="rate-form-{{ r.id }}" method="post" action="{{ url_for('update_location_rate', rate_id=r.id) }}"></form>{% endfor %}
+<table class="table table-sm bg-white align-middle">
+  <thead><tr><th>Site</th><th>Activity</th><th>Colour override</th><th>AM $</th><th>PM $</th><th>All-day $</th><th></th></tr></thead>
+  <tbody>
+    {% for r in rates %}
+    <tr>
+      <td>{{ r.location_name }}</td>
+      <td>{{ r.activity }}</td>
+      <td><input form="rate-form-{{ r.id }}" type="color" class="form-control form-control-sm form-control-color" name="color" value="{{ r.color or '#888888' }}"></td>
+      <td><input form="rate-form-{{ r.id }}" type="text" class="form-control form-control-sm" name="am_value" placeholder="e.g. 2300*0.75" value="{{ r.am_value_formula or r.am_value }}"></td>
+      <td><input form="rate-form-{{ r.id }}" type="text" class="form-control form-control-sm" name="pm_value" placeholder="e.g. 2300*0.75" value="{{ r.pm_value_formula or r.pm_value }}"></td>
+      <td><input form="rate-form-{{ r.id }}" type="text" class="form-control form-control-sm" name="allday_value" placeholder="e.g. 2200-360" value="{{ r.allday_value_formula or r.allday_value }}"></td>
+      <td><button form="rate-form-{{ r.id }}" class="btn btn-sm btn-outline-primary" type="submit">Save</button></td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

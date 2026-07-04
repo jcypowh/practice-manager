@@ -1,0 +1,29 @@
+{% extends 'base.html' %}
+{% block title %}Settings{% endblock %}
+{% block content %}
+<h3>Settings</h3>
+<form method="post" class="mb-2">
+  <div class="mb-3">
+    <label class="form-label">Claude API key</label>
+    <input type="password" class="form-control" name="claude_api_key" value="{{ claude_api_key }}" placeholder="sk-ant-...">
+  </div>
+  <div class="row g-2 mb-3">
+    <div class="col-auto">
+      <label class="form-label">Analysis trailing months</label>
+      <input type="number" class="form-control" name="analysis_trailing_months" value="{{ analysis_trailing_months }}">
+    </div>
+    <div class="col-auto">
+      <label class="form-label">Under-utilization threshold (sessions/month)</label>
+      <input type="number" step="0.1" class="form-control" name="utilization_flag_threshold" value="{{ utilization_flag_threshold }}">
+    </div>
+    <div class="col-auto">
+      <label class="form-label">Over-booking threshold (sessions/month)</label>
+      <input type="number" step="0.1" class="form-control" name="analysis_overbook_threshold" value="{{ analysis_overbook_threshold }}">
+    </div>
+  </div>
+  <button class="btn btn-primary" type="submit">Save settings</button>
+</form>
+<form method="post" action="{{ url_for('test_claude') }}">
+  <button class="btn btn-outline-secondary btn-sm">Test Claude connection</button>
+</form>
+{% endblock %}

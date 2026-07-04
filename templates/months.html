@@ -1,0 +1,37 @@
+{% extends 'base.html' %}
+{% block title %}Months{% endblock %}
+{% block content %}
+<h3>Months {% if archived %}(Archived){% endif %}</h3>
+<div class="mb-2">
+  {% if archived %}<a href="{{ url_for('months_page') }}">Back to active months</a>
+  {% else %}<a href="{{ url_for('months_archive_page') }}">View archived months</a>{% endif %}
+</div>
+<table class="table bg-white">
+  <thead><tr><th>Month</th><th>Status</th><th>Source</th><th></th></tr></thead>
+  <tbody>
+    {% for m in months %}
+    <tr>
+      <td><a href="{{ url_for('board', month_id=m.id) }}">{{ m.label }}</a></td>
+      <td><span class="badge bg-secondary">{{ m.status }}</span></td>
+      <td>{{ m.source }}</td>
+      <td class="text-end">
+        {% if not archived %}
+          {% if m.status == 'draft' %}
+          <form method="post" action="{{ url_for('publish_month', month_id=m.id) }}" class="d-inline">
+            <button class="btn btn-sm btn-success">Publish</button>
+          </form>
+          {% endif %}
+          <form method="post" action="{{ url_for('archive_month', month_id=m.id) }}" class="d-inline">
+            <button class="btn btn-sm btn-outline-secondary">Archive</button>
+          </form>
+        {% else %}
+          <form method="post" action="{{ url_for('unarchive_month', month_id=m.id) }}" class="d-inline">
+            <button class="btn btn-sm btn-outline-secondary">Unarchive</button>
+          </form>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

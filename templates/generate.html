@@ -1,0 +1,29 @@
+{% extends 'base.html' %}
+{% block title %}Generate schedule{% endblock %}
+{% block content %}
+<h3>Generate a future month with Claude</h3>
+<p class="text-muted">Drafts a full month using a reference month's rotation pattern. The result lands as a normal draft month on the board — review, drag-edit, then Publish when ready.</p>
+<form method="post">
+  <div class="row g-2 mb-2">
+    <div class="col-auto">
+      <label class="form-label">Target year</label>
+      <input type="number" class="form-control" name="target_year" value="{{ months[0].year if months else 2026 }}" required>
+    </div>
+    <div class="col-auto">
+      <label class="form-label">Target month (1-12)</label>
+      <input type="number" class="form-control" name="target_month" min="1" max="12" required>
+    </div>
+    <div class="col-auto">
+      <label class="form-label">Reference month</label>
+      <select class="form-select" name="reference_month_id">
+        {% for m in months %}<option value="{{ m.id }}">{{ m.label }}</option>{% endfor %}
+      </select>
+    </div>
+  </div>
+  <div class="mb-2">
+    <label class="form-label">Constraints (optional)</label>
+    <textarea class="form-control" name="constraints" rows="3" placeholder="e.g. Reduce Darlinghurst to fortnightly starting this month"></textarea>
+  </div>
+  <button class="btn btn-primary" type="submit">Generate draft</button>
+</form>
+{% endblock %}
