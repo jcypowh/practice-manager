@@ -1,0 +1,35 @@
+{% extends 'base.html' %}
+{% block title %}Holidays{% endblock %}
+{% block content %}
+<h3><i class="fa-solid fa-umbrella-beach"></i> Holidays</h3>
+<p class="text-muted">Days off/leave. Each holiday day blocks the whole day (not split AM/PM) on the Board and its earnings become $0, overriding whatever would otherwise be scheduled there.</p>
+
+<h5>Add holiday day(s)</h5>
+<form method="post" action="{{ url_for('holiday_new') }}" class="row g-2 mb-4 align-items-end">
+  <div class="col-auto"><label class="form-label">From</label><input type="date" class="form-control" name="start_date" required></div>
+  <div class="col-auto"><label class="form-label">To (optional, for a range)</label><input type="date" class="form-control" name="end_date"></div>
+  <div class="col-auto"><label class="form-label">Label</label><input type="text" class="form-control" name="label" placeholder="Christmas / Leave" style="width:220px;"></div>
+  <div class="col-auto"><button class="btn btn-primary" type="submit">Add</button></div>
+</form>
+
+<h5>All holidays</h5>
+<table class="table table-sm bg-white align-middle">
+  <thead><tr><th>Date</th><th>Label</th><th></th></tr></thead>
+  <tbody>
+    {% for h in holidays %}
+    <tr>
+      <td>{{ h.date }}</td>
+      <td>{{ h.label }}</td>
+      <td class="text-nowrap">
+        <form method="post" action="{{ url_for('holiday_delete', holiday_id=h.id) }}" class="d-inline" onsubmit="return confirm('Remove this holiday day?');">
+          <button class="btn btn-sm btn-outline-danger" type="submit">Delete</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+    {% if not holidays %}
+    <tr><td colspan="3" class="text-muted">No holidays set yet.</td></tr>
+    {% endif %}
+  </tbody>
+</table>
+{% endblock %}

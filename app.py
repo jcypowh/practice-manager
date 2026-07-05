@@ -256,6 +256,13 @@ def init_db():
         created_at     TEXT DEFAULT CURRENT_TIMESTAMP,
         updated_at     TEXT DEFAULT CURRENT_TIMESTAMP
     );
+
+    CREATE TABLE IF NOT EXISTS holidays (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        date        TEXT NOT NULL UNIQUE,
+        label       TEXT DEFAULT 'Holiday',
+        created_at  TEXT DEFAULT CURRENT_TIMESTAMP
+    );
     ''')
     db.commit()
 
@@ -355,6 +362,10 @@ def get_or_create_rate(db, location_id, activity):
                        (location_id, activity)).fetchone()
 
 
+def _holiday_dates(db):
+    return {r['date'] for r in db.execute('SELECT date FROM holidays').fetchall()}
+
+
 def get_or_create_month(db, year, month, source='import'):
     row = db.execute('SELECT id FROM months WHERE year=? AND month=?', (year, month)).fetchone()
     if row:
@@ -448,17 +459,35 @@ def get_board_data(db, month_id):
     ''', (month_id,)).fetchall()
     rates = db.execute('SELECT * FROM location_activity_rates').fetchall()
     rate_map = {(r['location_id'], r['activity']): r for r in rates}
+    holiday_map = {r['date']: r['label'] for r in db.execute('SELECT date, label FROM holidays').fetchall()}
 
     by_date = {}
     for b in blocks:
         rate = rate_map.get((b['location_id'], b['activity']))
         color = _effective_color(rate, b['location_color'])
-        value = _effective_value(b['value_override'], rate, b['default_am_value'],
-                                  b['default_pm_value'], b['default_allday_value'], b['slot'])
+        # A holiday zeroes out earnings for that day regardless of what's scheduled -
+        # "blocked off" means the day doesn't count, even if a block technically exists there.
+        value = 0.0 if b['date'] in holiday_map else _effective_value(
+            b['value_override'], rate, b['default_am_value'], b['default_pm_value'],
+            b['default_allday_value'], b['slot'])
         value_formula = _slot_formula(rate, b['slot'])
         time_weight = _effective_time_weight(b['time_weight'], b['slot'])
         by_date.setdefault(b['date'], []).append(
             dict(b, color=color, value=value, value_formula=value_formula, time_weight_effective=time_weight))
+
+    # A business day that's entirely a holiday has no blocks at all, so it wouldn't
+    # otherwise appear in `by_date` - without this, a fully-holidayed week (e.g. a whole
+    # week of leave) would vanish from the board instead of showing as blocked off.
+    month_row = db.execute('SELECT year, month FROM months WHERE id=?', (month_id,)).fetchone()
+    if month_row:
+        first = datetime.date(month_row['year'], month_row['month'], 1)
+        next_month = datetime.date(month_row['year'] + (month_row['month'] == 12),
+                                    1 if month_row['month'] == 12 else month_row['month'] + 1, 1)
+        d = first
+        while d < next_month:
+            if d.weekday() < 5 and d.isoformat() in holiday_map:
+                by_date.setdefault(d.isoformat(), [])
+            d += datetime.timedelta(days=1)
 
     dates = sorted(by_date.keys())
     if not dates:
@@ -481,7 +510,8 @@ def get_board_data(db, month_id):
         day_blocks = by_date[d_str]
         current_week['days'][d.weekday()] = {'date': d_str, 'day_name': d.strftime('%A'), 'blocks': day_blocks,
                                               'total': sum(b['value'] for b in day_blocks),
-                                              'gp_meetings': gp_by_date.get(d_str, [])}
+                                              'gp_meetings': gp_by_date.get(d_str, []),
+                                              'holiday': holiday_map.get(d_str)}
     for w in weeks:
         days = []
         for wd in range(5):
@@ -490,7 +520,8 @@ def get_board_data(db, month_id):
             else:
                 d = w['monday'] + datetime.timedelta(days=wd)
                 days.append({'date': d.isoformat(), 'day_name': d.strftime('%A'), 'blocks': [], 'total': 0,
-                             'gp_meetings': gp_by_date.get(d.isoformat(), [])})
+                             'gp_meetings': gp_by_date.get(d.isoformat(), []),
+                             'holiday': holiday_map.get(d.isoformat())})
         w['days'] = days
         w['total'] = sum(day['total'] for day in days)
     return weeks
@@ -523,11 +554,13 @@ def compute_earnings(db, month_id):
                            WHERE b.month_id=? AND b.status != 'hold' ''', (month_id,)).fetchall()
     rates = db.execute('SELECT * FROM location_activity_rates').fetchall()
     rate_map = {(r['location_id'], r['activity']): r for r in rates}
+    holiday_dates = _holiday_dates(db)
     weekly, by_site, total = {}, {}, 0.0
     for b in blocks:
         rate = rate_map.get((b['location_id'], b['activity']))
-        value = _effective_value(b['value_override'], rate, b['default_am_value'],
-                                  b['default_pm_value'], b['default_allday_value'], b['slot'])
+        value = 0.0 if b['date'] in holiday_dates else _effective_value(
+            b['value_override'], rate, b['default_am_value'], b['default_pm_value'],
+            b['default_allday_value'], b['slot'])
         d = datetime.date.fromisoformat(b['date'])
         monday = (d - datetime.timedelta(days=d.weekday())).isoformat()
         # weekly rollup shows the real week total (may include a spillover day from an
@@ -579,6 +612,7 @@ def _compute_analysis(db, period):
 
     rates = db.execute('SELECT * FROM location_activity_rates').fetchall()
     rate_map = {(r['location_id'], r['activity']): r for r in rates}
+    holiday_dates = _holiday_dates(db)
 
     site_counts, site_totals, site_time_units = {}, {}, {}
     site_activity_counts, site_activity_totals = {}, {}
@@ -594,8 +628,9 @@ def _compute_analysis(db, period):
 
     for r in rows:
         rate = rate_map.get((r['location_id'], r['activity']))
-        value = _effective_value(r['value_override'], rate, r['default_am_value'],
-                                  r['default_pm_value'], r['default_allday_value'], r['slot'])
+        value = 0.0 if r['date'] in holiday_dates else _effective_value(
+            r['value_override'], rate, r['default_am_value'], r['default_pm_value'],
+            r['default_allday_value'], r['slot'])
         weight = _effective_time_weight(r['time_weight'], r['slot'])
         name = r['location_name']
         site_counts[name] = site_counts.get(name, 0) + 1
@@ -1107,9 +1142,48 @@ def gp_meeting_delete(meeting_id):
     return redirect(url_for('gp_meetings_page'))
 
 
+# ---------------------------------------------------------------- Holidays
+
+@app.route('/holidays')
+def holidays_page():
+    db = get_db()
+    holidays = db.execute('SELECT * FROM holidays ORDER BY date').fetchall()
+    return render_template('holidays.html', holidays=holidays)
+
+
+@app.route('/holidays/new', methods=['POST'])
+def holiday_new():
+    f = request.form
+    db = get_db()
+    start = f.get('start_date')
+    end = f.get('end_date') or start
+    label = f.get('label') or 'Holiday'
+    if not start:
+        flash('Start date is required.', 'warning')
+        return redirect(url_for('holidays_page'))
+    d, d_end = datetime.date.fromisoformat(start), datetime.date.fromisoformat(end)
+    added = 0
+    while d <= d_end:
+        db.execute('INSERT OR IGNORE INTO holidays(date, label) VALUES(?,?)', (d.isoformat(), label))
+        added += 1
+        d += datetime.timedelta(days=1)
+    db.commit()
+    flash(f'Added {added} holiday day(s).', 'success')
+    return redirect(url_for('holidays_page'))
+
+
+@app.route('/holidays/<int:holiday_id>/delete', methods=['POST'])
+def holiday_delete(holiday_id):
+    db = get_db()
+    db.execute('DELETE FROM holidays WHERE id=?', (holiday_id,))
+    db.commit()
+    flash('Holiday removed.', 'success')
+    return redirect(url_for('holidays_page'))
+
+
 # ---------------------------------------------------------------- Export / Import (full data)
 
-EXPORT_TABLES = ['locations', 'location_activity_rates', 'months', 'blocks', 'gp_meetings']
+EXPORT_TABLES = ['locations', 'location_activity_rates', 'months', 'blocks', 'gp_meetings', 'holidays']
 # claude_api_key is deliberately excluded - each deployment manages its own key.
 EXPORT_CONFIG_KEYS = ['analysis_trailing_months', 'utilization_flag_threshold', 'analysis_overbook_threshold']
 BACKUP_DIR = DATA_DIR / 'backups'
@@ -1176,6 +1250,7 @@ def import_data_page():
             db.execute('DELETE FROM months')
             db.execute('DELETE FROM locations')
             db.execute('DELETE FROM gp_meetings')
+            db.execute('DELETE FROM holidays')
 
             for loc in payload.get('locations', []):
                 cols = list(loc.keys())
@@ -1193,6 +1268,9 @@ def import_data_page():
             for gm in payload.get('gp_meetings', []):
                 cols = list(gm.keys())
                 db.execute(f'INSERT INTO gp_meetings ({",".join(cols)}) VALUES ({",".join(":" + c for c in cols)})', gm)
+            for h in payload.get('holidays', []):
+                cols = list(h.keys())
+                db.execute(f'INSERT INTO holidays ({",".join(cols)}) VALUES ({",".join(":" + c for c in cols)})', h)
             for k, v in payload.get('config', {}).items():
                 if k in EXPORT_CONFIG_KEYS:
                     db.execute('INSERT OR REPLACE INTO config(key, value) VALUES (?, ?)', (k, v))
@@ -1204,7 +1282,7 @@ def import_data_page():
 
         flash(f"Import complete - replaced everything with: {counts['locations']} locations, "
               f"{counts['location_activity_rates']} site/activity rates, {counts['months']} months, "
-              f"{counts['blocks']} blocks, {counts['gp_meetings']} GP meetings. "
+              f"{counts['blocks']} blocks, {counts['gp_meetings']} GP meetings, {counts['holidays']} holidays. "
               f"(A backup of what was here before was saved to the server's storage first.)", 'success')
         return redirect(url_for('index'))
 
@@ -1437,6 +1515,75 @@ def generate_page():
         return redirect(url_for('board', month_id=month_id))
 
     return render_template('generate.html', months=months)
+
+
+def build_rotation_template(db, reference_month_id):
+    """Maps (rotation-week label, weekday name, slot) -> list of block templates, learned
+    from one reference month. Since the 4-week rotation repeats forever regardless of the
+    calendar, this template can be replayed onto any future month's matching weekdays
+    without needing Claude at all."""
+    rows = db.execute('''SELECT date, slot, location_id, activity, activity_raw, time_note, notes
+                          FROM blocks WHERE month_id=? AND status != 'hold' ''', (reference_month_id,)).fetchall()
+    by_key_and_monday = {}
+    for r in rows:
+        d = datetime.date.fromisoformat(r['date'])
+        monday = d - datetime.timedelta(days=d.weekday())
+        key = (week_rotation_label(monday), d.strftime('%A'), r['slot'])
+        by_key_and_monday.setdefault(key, {}).setdefault(monday, []).append(dict(r))
+    # A rotation-week label can recur twice within one reference month (e.g. a 5-Monday
+    # month like August 2026 hits "Week 2" on both Aug 3 and Aug 31) - use only the most
+    # recent occurrence so replaying the template doesn't stack duplicate blocks per slot.
+    return {key: mondays[max(mondays)] for key, mondays in by_key_and_monday.items()}
+
+
+@app.route('/generate/rotation', methods=['POST'])
+def generate_rotation_draft():
+    """Non-AI schedule draft: replays the reference month's rotation-week template onto
+    every business day of the target month. No Claude API call/key needed."""
+    db = get_db()
+    target_year = request.form.get('target_year', type=int)
+    target_month = request.form.get('target_month', type=int)
+    reference_month_id = request.form.get('reference_month_id', type=int)
+
+    existing = db.execute('SELECT id FROM months WHERE year=? AND month=?',
+                           (target_year, target_month)).fetchone()
+    if existing:
+        flash(f'{target_year}-{target_month:02d} already has a month record — pick a month with '
+              f'no existing schedule, or edit that month directly on the board.', 'warning')
+        return redirect(url_for('generate_page'))
+
+    template = build_rotation_template(db, reference_month_id)
+    if not template:
+        flash('That reference month has no schedule to learn a rotation pattern from.', 'warning')
+        return redirect(url_for('generate_page'))
+
+    holiday_dates = _holiday_dates(db)
+    label = datetime.date(target_year, target_month, 1).strftime('%B %Y')
+    cur = db.execute('''INSERT INTO months(year, month, label, status, source)
+                        VALUES(?,?,?,'draft','rotation_generated')''', (target_year, target_month, label))
+    db.commit()
+    month_id = cur.lastrowid
+
+    created = 0
+    d = datetime.date(target_year, target_month, 1)
+    while d.month == target_month:
+        if d.weekday() < 5 and d.isoformat() not in holiday_dates:
+            monday = d - datetime.timedelta(days=d.weekday())
+            rotation_label = week_rotation_label(monday)
+            day_name = d.strftime('%A')
+            for slot in ('AM', 'PM', 'All day'):
+                for entry in template.get((rotation_label, day_name, slot), []):
+                    db.execute('''INSERT INTO blocks(month_id, date, day_name, slot, location_id, activity,
+                                  activity_raw, time_note, notes, status, source)
+                                  VALUES(?,?,?,?,?,?,?,?,?, 'scheduled', 'rotation_generated')''',
+                               (month_id, d.isoformat(), day_name, slot, entry['location_id'], entry['activity'],
+                                entry['activity_raw'], entry['time_note'], entry['notes']))
+                    created += 1
+        d += datetime.timedelta(days=1)
+    db.commit()
+    flash(f'Generated {created} sessions for {label} from the rotation pattern (no API used). '
+          f'Review and edit on the board, then Publish when ready.', 'success')
+    return redirect(url_for('board', month_id=month_id))
 
 
 if __name__ == '__main__':

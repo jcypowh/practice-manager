@@ -70,6 +70,11 @@
     </tr>
     <tr>
       {% for day in week.days %}
+        {% if day.holiday %}
+        <td class="slot-cell holiday-cell" rowspan="2">
+          <div class="holiday-block"><i class="fa-solid fa-umbrella-beach"></i> HOLIDAY<br>{{ day.holiday }}</div>
+        </td>
+        {% else %}
         {% set allday_blocks = day.blocks | selectattr('slot', 'equalto', 'All day') | list %}
         {% set am_blocks = day.blocks | selectattr('slot', 'equalto', 'AM') | list %}
         {% set pm_blocks = day.blocks | selectattr('slot', 'equalto', 'PM') | list %}
@@ -83,10 +88,12 @@
           {% for b in allday_blocks %}{{ block_box(b) }}{% endfor %}
         </td>
         {% endif %}
+        {% endif %}
       {% endfor %}
     </tr>
     <tr>
       {% for day in week.days %}
+        {% if not day.holiday %}
         {% set allday_blocks = day.blocks | selectattr('slot', 'equalto', 'All day') | list %}
         {% set am_blocks = day.blocks | selectattr('slot', 'equalto', 'AM') | list %}
         {% set pm_blocks = day.blocks | selectattr('slot', 'equalto', 'PM') | list %}
@@ -94,6 +101,7 @@
         <td class="slot-cell" data-date="{{ day.date }}" data-slot="PM">
           {% for b in pm_blocks %}{{ block_box(b) }}{% endfor %}
         </td>
+        {% endif %}
         {% endif %}
       {% endfor %}
     </tr>
