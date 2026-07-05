@@ -152,8 +152,38 @@
   <button class="btn btn-primary btn-sm">Generate narrative analysis with Claude</button>
 </form>
 {% if narrative %}
-<div class="card"><div class="card-body" style="white-space: pre-wrap;">{{ narrative }}</div></div>
+<div class="card mb-4"><div class="card-body" style="white-space: pre-wrap;">{{ narrative }}</div></div>
 {% endif %}
+
+<h5 class="mt-4">Scenario planning with Claude</h5>
+
+<div class="card mb-3"><div class="card-body">
+  <h6>Suggest days off</h6>
+  <p class="text-muted small mb-2">Finds the run of consecutive calendar days (using the Week 1-4 rotation pattern, and preferring a window that overlaps a weekend) with the least earning impact.</p>
+  <form method="post" action="{{ url_for('analysis_claude_days_off') }}" class="row g-2 align-items-end">
+    <input type="hidden" name="period" value="{{ period }}">
+    <div class="col-auto">
+      <label class="form-label">Consecutive days off</label>
+      <input type="number" class="form-control" name="num_days" value="{{ days_off_num }}" min="2" max="14">
+    </div>
+    <div class="col-auto"><button class="btn btn-primary btn-sm">Suggest best days off</button></div>
+  </form>
+  {% if days_off_result %}<div class="mt-2" style="white-space: pre-wrap;">{{ days_off_result }}</div>{% endif %}
+</div></div>
+
+<div class="card mb-3"><div class="card-body">
+  <h6>SHORE Gastro expansion trade-off</h6>
+  <p class="text-muted small mb-2">If SHORE Gastro grows, recommends what to sacrifice elsewhere to make room, prioritizing the lowest-yield sessions without starving either referral pipeline.</p>
+  <form method="post" action="{{ url_for('analysis_claude_shore_expansion') }}" class="row g-2 align-items-end">
+    <input type="hidden" name="period" value="{{ period }}">
+    <div class="col-auto">
+      <label class="form-label">Extra SHORE Gastro sessions/week</label>
+      <input type="number" class="form-control" name="extra_sessions" value="{{ shore_extra_sessions }}" min="0.5" max="20" step="0.5">
+    </div>
+    <div class="col-auto"><button class="btn btn-primary btn-sm">Suggest what to sacrifice</button></div>
+  </form>
+  {% if shore_result %}<div class="mt-2" style="white-space: pre-wrap;">{{ shore_result }}</div>{% endif %}
+</div></div>
 
 {% endif %}
 {% endblock %}

@@ -1286,21 +1286,25 @@ def _resolve_period(raw, months):
     return months[0]['id'] if months else 'all'
 
 
-@app.route('/analysis')
-def analysis_page():
+def _analysis_context(raw_period):
     db = get_db()
     months = db.execute("SELECT * FROM months WHERE status != 'archived' ORDER BY year DESC, month DESC").fetchall()
-    period = _resolve_period(request.args.get('period'), months)
+    period = _resolve_period(raw_period, months)
     data = _compute_analysis(db, period)
-    return render_template('analysis.html', data=data, months=months, period=period, narrative=None)
+    return db, months, period, data
+
+
+@app.route('/analysis')
+def analysis_page():
+    db, months, period, data = _analysis_context(request.args.get('period'))
+    return render_template('analysis.html', data=data, months=months, period=period,
+                           narrative=None, days_off_result=None, days_off_num=4,
+                           shore_result=None, shore_extra_sessions=1)
 
 
 @app.route('/analysis/claude', methods=['POST'])
 def analysis_claude():
-    db = get_db()
-    months = db.execute("SELECT * FROM months WHERE status != 'archived' ORDER BY year DESC, month DESC").fetchall()
-    period = _resolve_period(request.form.get('period'), months)
-    data = _compute_analysis(db, period)
+    db, months, period, data = _analysis_context(request.form.get('period'))
     api_key = cfg('claude_api_key')
     narrative = None
     if not api_key:
@@ -1312,7 +1316,51 @@ def analysis_claude():
             narrative = claude_integration.narrative_analysis(api_key, data)
         except Exception as e:
             flash(f'Claude request failed: {e}', 'danger')
-    return render_template('analysis.html', data=data, months=months, period=period, narrative=narrative)
+    return render_template('analysis.html', data=data, months=months, period=period,
+                           narrative=narrative, days_off_result=None, days_off_num=4,
+                           shore_result=None, shore_extra_sessions=1)
+
+
+@app.route('/analysis/claude-days-off', methods=['POST'])
+def analysis_claude_days_off():
+    db, months, period, data = _analysis_context(request.form.get('period'))
+    num_days = request.form.get('num_days', type=int) or 4
+    api_key = cfg('claude_api_key')
+    result = None
+    if not api_key:
+        flash('Set your Claude API key in Settings first.', 'warning')
+    elif not data:
+        flash('No data for this period yet.', 'warning')
+    else:
+        try:
+            result = claude_integration.suggest_days_off(api_key, data['rotation_weeks'], num_days, data['period_label'])
+        except Exception as e:
+            flash(f'Claude request failed: {e}', 'danger')
+    return render_template('analysis.html', data=data, months=months, period=period,
+                           narrative=None, days_off_result=result, days_off_num=num_days,
+                           shore_result=None, shore_extra_sessions=1)
+
+
+@app.route('/analysis/claude-shore-expansion', methods=['POST'])
+def analysis_claude_shore_expansion():
+    db, months, period, data = _analysis_context(request.form.get('period'))
+    extra_sessions = request.form.get('extra_sessions', type=float) or 1
+    api_key = cfg('claude_api_key')
+    result = None
+    if not api_key:
+        flash('Set your Claude API key in Settings first.', 'warning')
+    elif not data:
+        flash('No data for this period yet.', 'warning')
+    else:
+        try:
+            result = claude_integration.suggest_shore_expansion_tradeoff(
+                api_key, data['group_breakdown'], data['site_breakdown'], data['pipelines'],
+                extra_sessions, data['period_label'])
+        except Exception as e:
+            flash(f'Claude request failed: {e}', 'danger')
+    return render_template('analysis.html', data=data, months=months, period=period,
+                           narrative=None, days_off_result=None, days_off_num=4,
+                           shore_result=result, shore_extra_sessions=extra_sessions)
 
 
 # ---------------------------------------------------------------- Claude schedule generation
