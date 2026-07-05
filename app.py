@@ -7,7 +7,7 @@ import datetime
 from pathlib import Path
 from io import BytesIO
 
-from flask import Flask, g, render_template, request, redirect, url_for, flash, jsonify
+from flask import Flask, g, render_template, request, redirect, url_for, flash, jsonify, Response
 import openpyxl
 
 import importer
@@ -841,6 +841,90 @@ def test_claude():
     except Exception as e:
         flash(f'Claude connection failed: {e}', 'danger')
     return redirect(url_for('settings_page'))
+
+
+# ---------------------------------------------------------------- Export / Import (full data)
+
+EXPORT_TABLES = ['locations', 'location_activity_rates', 'months', 'blocks']
+# claude_api_key is deliberately excluded - each deployment manages its own key.
+EXPORT_CONFIG_KEYS = ['analysis_trailing_months', 'utilization_flag_threshold', 'analysis_overbook_threshold']
+
+
+@app.route('/export')
+def export_data():
+    """Dump every table that defines 'what the schedule looks like' - sites, colours,
+    per-slot values/formulas, months, and every block (date/slot/activity/notes/status) -
+    as one JSON file. Pairs with /import-data to move this exactly onto another deployment
+    (e.g. local -> Railway) without re-entering colours/rates/holds by hand."""
+    db = get_db()
+    data = {'exported_at': datetime.datetime.now().isoformat(), 'version': 1}
+    for table in EXPORT_TABLES:
+        rows = db.execute(f'SELECT * FROM {table}').fetchall()
+        data[table] = [dict(r) for r in rows]
+    cfg_rows = db.execute(
+        f"SELECT key, value FROM config WHERE key IN ({','.join('?' * len(EXPORT_CONFIG_KEYS))})",
+        EXPORT_CONFIG_KEYS).fetchall()
+    data['config'] = {r['key']: r['value'] for r in cfg_rows}
+    payload = json.dumps(data, indent=2)
+    filename = f"practice_manager_export_{datetime.date.today().isoformat()}.json"
+    return Response(payload, mimetype='application/json',
+                     headers={'Content-Disposition': f'attachment; filename="{filename}"'})
+
+
+@app.route('/import-data', methods=['GET', 'POST'])
+def import_data_page():
+    if request.method == 'POST':
+        file = request.files.get('file')
+        if not file or not file.filename:
+            flash('Please choose an export file to upload.', 'warning')
+            return redirect(url_for('import_data_page'))
+        try:
+            payload = json.loads(file.read().decode('utf-8'))
+        except (ValueError, UnicodeDecodeError) as e:
+            flash(f'Could not read that file: {e}', 'danger')
+            return redirect(url_for('import_data_page'))
+
+        db = get_db()
+        counts = {t: len(payload.get(t, [])) for t in EXPORT_TABLES}
+        try:
+            # Child tables first, then parents, mirroring foreign-key direction both ways.
+            # import_log.month_id also references months (no cascade) - it's just an audit
+            # trail, not schedule data, so it's cleared rather than exported/imported.
+            db.execute('DELETE FROM blocks')
+            db.execute('DELETE FROM location_activity_rates')
+            db.execute('DELETE FROM board_snapshots')
+            db.execute('DELETE FROM import_log')
+            db.execute('DELETE FROM months')
+            db.execute('DELETE FROM locations')
+
+            for loc in payload.get('locations', []):
+                cols = list(loc.keys())
+                db.execute(f'INSERT INTO locations ({",".join(cols)}) VALUES ({",".join(":" + c for c in cols)})', loc)
+            for m in payload.get('months', []):
+                cols = list(m.keys())
+                db.execute(f'INSERT INTO months ({",".join(cols)}) VALUES ({",".join(":" + c for c in cols)})', m)
+            for rate in payload.get('location_activity_rates', []):
+                cols = list(rate.keys())
+                db.execute(f'INSERT INTO location_activity_rates ({",".join(cols)}) '
+                           f'VALUES ({",".join(":" + c for c in cols)})', rate)
+            for b in payload.get('blocks', []):
+                cols = list(b.keys())
+                db.execute(f'INSERT INTO blocks ({",".join(cols)}) VALUES ({",".join(":" + c for c in cols)})', b)
+            for k, v in payload.get('config', {}).items():
+                if k in EXPORT_CONFIG_KEYS:
+                    db.execute('INSERT OR REPLACE INTO config(key, value) VALUES (?, ?)', (k, v))
+            db.commit()
+        except Exception as e:
+            db.rollback()
+            flash(f'Import failed, no changes were made: {e}', 'danger')
+            return redirect(url_for('import_data_page'))
+
+        flash(f"Import complete - replaced everything with: {counts['locations']} locations, "
+              f"{counts['location_activity_rates']} site/activity rates, {counts['months']} months, "
+              f"{counts['blocks']} blocks.", 'success')
+        return redirect(url_for('index'))
+
+    return render_template('import_data.html')
 
 
 # ---------------------------------------------------------------- Months

@@ -1,0 +1,19 @@
+{% extends 'base.html' %}
+{% block title %}Import Full Data{% endblock %}
+{% block content %}
+<h3>Import Full Data</h3>
+<p class="text-muted">Restore a full export (from <a href="{{ url_for('export_data') }}">Export</a> on another
+deployment - e.g. bringing your local schedule up onto the live Railway site). This includes every site, colour,
+per-slot value/calculation, month, and block (dates, slots, activity, notes, hold status).</p>
+
+<div class="alert alert-danger">
+  <strong>This replaces everything.</strong> All current locations, rates, months, and blocks on <em>this</em>
+  deployment will be permanently deleted and replaced with the contents of the file you upload. Your Claude API
+  key and any other per-deployment settings are not affected.
+</div>
+
+<form method="post" enctype="multipart/form-data" onsubmit="return confirm('This will delete ALL current locations, rates, months, and blocks on this deployment and replace them with the uploaded file. Continue?');">
+  <div class="mb-2"><input type="file" name="file" class="form-control" accept=".json" required></div>
+  <button class="btn btn-danger" type="submit">Replace everything with this file</button>
+</form>
+{% endblock %}
