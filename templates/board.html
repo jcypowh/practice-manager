@@ -58,7 +58,14 @@
     <tr>
       <td class="week-col" rowspan="4">{{ week.label }}<br><small>{{ week.monday.strftime('%d %b') }}</small></td>
       {% for day in week.days %}
-        <td class="day-date-cell">{{ day.day_name[:3] }} {{ day.date[-2:] }} <span class="day-total">${{ '%.0f'|format(day.total) }}</span></td>
+        <td class="day-date-cell">
+          {{ day.day_name[:3] }} {{ day.date[-2:] }} <span class="day-total">${{ '%.0f'|format(day.total) }}</span>
+          {% for gm in day.gp_meetings %}
+          <div class="gp-meeting-chip {{ 'gp-tentative' if gm.status != 'Confirmed' else '' }}" title="{{ gm.address }}{% if gm.notes %} - {{ gm.notes }}{% endif %}">
+            <i class="fa-solid fa-user-doctor"></i> {{ gm.practice_name }}{% if gm.time_start %} {{ gm.time_start }}{% if gm.time_end %}-{{ gm.time_end }}{% endif %}{% endif %}
+          </div>
+          {% endfor %}
+        </td>
       {% endfor %}
     </tr>
     <tr>

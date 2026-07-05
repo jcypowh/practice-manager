@@ -243,6 +243,19 @@ def init_db():
         snapshot_json   TEXT NOT NULL,
         created_at      TEXT DEFAULT CURRENT_TIMESTAMP
     );
+
+    CREATE TABLE IF NOT EXISTS gp_meetings (
+        id             INTEGER PRIMARY KEY AUTOINCREMENT,
+        date           TEXT NOT NULL,
+        time_start     TEXT DEFAULT '',
+        time_end       TEXT DEFAULT '',
+        practice_name  TEXT NOT NULL,
+        address        TEXT DEFAULT '',
+        status         TEXT DEFAULT 'Tentative',
+        notes          TEXT DEFAULT '',
+        created_at     TEXT DEFAULT CURRENT_TIMESTAMP,
+        updated_at     TEXT DEFAULT CURRENT_TIMESTAMP
+    );
     ''')
     db.commit()
 
@@ -450,6 +463,11 @@ def get_board_data(db, month_id):
     dates = sorted(by_date.keys())
     if not dates:
         return []
+
+    gp_by_date = {}
+    for gm in db.execute('SELECT * FROM gp_meetings').fetchall():
+        gp_by_date.setdefault(gm['date'], []).append(dict(gm))
+
     weeks = []
     current_monday = None
     current_week = None
@@ -462,7 +480,8 @@ def get_board_data(db, month_id):
             weeks.append(current_week)
         day_blocks = by_date[d_str]
         current_week['days'][d.weekday()] = {'date': d_str, 'day_name': d.strftime('%A'), 'blocks': day_blocks,
-                                              'total': sum(b['value'] for b in day_blocks)}
+                                              'total': sum(b['value'] for b in day_blocks),
+                                              'gp_meetings': gp_by_date.get(d_str, [])}
     for w in weeks:
         days = []
         for wd in range(5):
@@ -470,7 +489,8 @@ def get_board_data(db, month_id):
                 days.append(w['days'][wd])
             else:
                 d = w['monday'] + datetime.timedelta(days=wd)
-                days.append({'date': d.isoformat(), 'day_name': d.strftime('%A'), 'blocks': [], 'total': 0})
+                days.append({'date': d.isoformat(), 'day_name': d.strftime('%A'), 'blocks': [], 'total': 0,
+                             'gp_meetings': gp_by_date.get(d.isoformat(), [])})
         w['days'] = days
         w['total'] = sum(day['total'] for day in days)
     return weeks
@@ -1040,20 +1060,62 @@ def test_claude():
     return redirect(url_for('settings_page'))
 
 
+# ---------------------------------------------------------------- GP Meetings
+
+@app.route('/gp-meetings')
+def gp_meetings_page():
+    db = get_db()
+    meetings = db.execute('SELECT * FROM gp_meetings ORDER BY date, time_start').fetchall()
+    return render_template('gp_meetings.html', meetings=meetings)
+
+
+@app.route('/gp-meetings/new', methods=['POST'])
+def gp_meeting_new():
+    f = request.form
+    db = get_db()
+    if not f.get('date') or not f.get('practice_name'):
+        flash('Date and practice name are required.', 'warning')
+        return redirect(url_for('gp_meetings_page'))
+    db.execute('''INSERT INTO gp_meetings(date, time_start, time_end, practice_name, address, status, notes)
+                  VALUES(?,?,?,?,?,?,?)''',
+               (f.get('date'), f.get('time_start', ''), f.get('time_end', ''), f.get('practice_name'),
+                f.get('address', ''), f.get('status', 'Tentative'), f.get('notes', '')))
+    db.commit()
+    flash('GP meeting added.', 'success')
+    return redirect(url_for('gp_meetings_page'))
+
+
+@app.route('/gp-meetings/<int:meeting_id>/update', methods=['POST'])
+def gp_meeting_update(meeting_id):
+    f = request.form
+    db = get_db()
+    db.execute('''UPDATE gp_meetings SET date=?, time_start=?, time_end=?, practice_name=?, address=?,
+                  status=?, notes=?, updated_at=CURRENT_TIMESTAMP WHERE id=?''',
+               (f.get('date'), f.get('time_start', ''), f.get('time_end', ''), f.get('practice_name'),
+                f.get('address', ''), f.get('status', 'Tentative'), f.get('notes', ''), meeting_id))
+    db.commit()
+    flash('GP meeting updated.', 'success')
+    return redirect(url_for('gp_meetings_page'))
+
+
+@app.route('/gp-meetings/<int:meeting_id>/delete', methods=['POST'])
+def gp_meeting_delete(meeting_id):
+    db = get_db()
+    db.execute('DELETE FROM gp_meetings WHERE id=?', (meeting_id,))
+    db.commit()
+    flash('GP meeting deleted.', 'success')
+    return redirect(url_for('gp_meetings_page'))
+
+
 # ---------------------------------------------------------------- Export / Import (full data)
 
-EXPORT_TABLES = ['locations', 'location_activity_rates', 'months', 'blocks']
+EXPORT_TABLES = ['locations', 'location_activity_rates', 'months', 'blocks', 'gp_meetings']
 # claude_api_key is deliberately excluded - each deployment manages its own key.
 EXPORT_CONFIG_KEYS = ['analysis_trailing_months', 'utilization_flag_threshold', 'analysis_overbook_threshold']
+BACKUP_DIR = DATA_DIR / 'backups'
 
 
-@app.route('/export')
-def export_data():
-    """Dump every table that defines 'what the schedule looks like' - sites, colours,
-    per-slot values/formulas, months, and every block (date/slot/activity/notes/status) -
-    as one JSON file. Pairs with /import-data to move this exactly onto another deployment
-    (e.g. local -> Railway) without re-entering colours/rates/holds by hand."""
-    db = get_db()
+def _export_snapshot(db):
     data = {'exported_at': datetime.datetime.now().isoformat(), 'version': 1}
     for table in EXPORT_TABLES:
         rows = db.execute(f'SELECT * FROM {table}').fetchall()
@@ -1062,7 +1124,16 @@ def export_data():
         f"SELECT key, value FROM config WHERE key IN ({','.join('?' * len(EXPORT_CONFIG_KEYS))})",
         EXPORT_CONFIG_KEYS).fetchall()
     data['config'] = {r['key']: r['value'] for r in cfg_rows}
-    payload = json.dumps(data, indent=2)
+    return data
+
+
+@app.route('/export')
+def export_data():
+    """Dump every table that defines 'what the schedule looks like' - sites, colours,
+    per-slot values/formulas, months, blocks, and GP meetings - as one JSON file. Pairs
+    with /import-data to move this exactly onto another deployment (e.g. local -> Railway)
+    without re-entering colours/rates/holds by hand."""
+    payload = json.dumps(_export_snapshot(get_db()), indent=2)
     filename = f"practice_manager_export_{datetime.date.today().isoformat()}.json"
     return Response(payload, mimetype='application/json',
                      headers={'Content-Disposition': f'attachment; filename="{filename}"'})
@@ -1083,6 +1154,17 @@ def import_data_page():
 
         db = get_db()
         counts = {t: len(payload.get(t, [])) for t in EXPORT_TABLES}
+
+        # Safety net: auto-save whatever's CURRENTLY here before it gets overwritten, even
+        # if the user didn't think to export first - so a forgotten backup never means lost
+        # data outright, just an extra step to dig the backup file out of storage.
+        try:
+            BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+            backup_name = f"pre_import_backup_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+            (BACKUP_DIR / backup_name).write_text(json.dumps(_export_snapshot(db), indent=2), encoding='utf-8')
+        except OSError:
+            pass  # backup is best-effort - never block a real import over a disk hiccup
+
         try:
             # Child tables first, then parents, mirroring foreign-key direction both ways.
             # import_log.month_id also references months (no cascade) - it's just an audit
@@ -1093,6 +1175,7 @@ def import_data_page():
             db.execute('DELETE FROM import_log')
             db.execute('DELETE FROM months')
             db.execute('DELETE FROM locations')
+            db.execute('DELETE FROM gp_meetings')
 
             for loc in payload.get('locations', []):
                 cols = list(loc.keys())
@@ -1107,6 +1190,9 @@ def import_data_page():
             for b in payload.get('blocks', []):
                 cols = list(b.keys())
                 db.execute(f'INSERT INTO blocks ({",".join(cols)}) VALUES ({",".join(":" + c for c in cols)})', b)
+            for gm in payload.get('gp_meetings', []):
+                cols = list(gm.keys())
+                db.execute(f'INSERT INTO gp_meetings ({",".join(cols)}) VALUES ({",".join(":" + c for c in cols)})', gm)
             for k, v in payload.get('config', {}).items():
                 if k in EXPORT_CONFIG_KEYS:
                     db.execute('INSERT OR REPLACE INTO config(key, value) VALUES (?, ?)', (k, v))
@@ -1118,7 +1204,8 @@ def import_data_page():
 
         flash(f"Import complete - replaced everything with: {counts['locations']} locations, "
               f"{counts['location_activity_rates']} site/activity rates, {counts['months']} months, "
-              f"{counts['blocks']} blocks.", 'success')
+              f"{counts['blocks']} blocks, {counts['gp_meetings']} GP meetings. "
+              f"(A backup of what was here before was saved to the server's storage first.)", 'success')
         return redirect(url_for('index'))
 
     return render_template('import_data.html')

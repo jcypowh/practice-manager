@@ -1,0 +1,54 @@
+{% extends 'base.html' %}
+{% block title %}GP Meetings{% endblock %}
+{% block content %}
+<h3><i class="fa-solid fa-user-doctor" style="color: var(--gp-meeting);"></i> GP Meetings</h3>
+<p class="text-muted">Practice-liaison meetings (RxTro) - tracked separately from the clinic/scope schedule, and shown on the Board in a distinct pink chip on the relevant date so they're easy to spot.</p>
+
+<h5>Add a meeting</h5>
+<form method="post" action="{{ url_for('gp_meeting_new') }}" class="row g-2 mb-4 align-items-end">
+  <div class="col-auto"><label class="form-label">Date</label><input type="date" class="form-control" name="date" required></div>
+  <div class="col-auto"><label class="form-label">Start</label><input type="text" class="form-control" name="time_start" placeholder="12:30" style="width:90px;"></div>
+  <div class="col-auto"><label class="form-label">End</label><input type="text" class="form-control" name="time_end" placeholder="13:30" style="width:90px;"></div>
+  <div class="col-auto"><label class="form-label">Practice</label><input type="text" class="form-control" name="practice_name" required></div>
+  <div class="col-auto"><label class="form-label">Address</label><input type="text" class="form-control" name="address" style="width:220px;"></div>
+  <div class="col-auto"><label class="form-label">Status</label>
+    <select class="form-select" name="status">
+      <option>Tentative</option>
+      <option>Confirmed</option>
+    </select>
+  </div>
+  <div class="col-auto"><label class="form-label">Notes</label><input type="text" class="form-control" name="notes" style="width:180px;"></div>
+  <div class="col-auto"><button class="btn btn-primary" type="submit">Add</button></div>
+</form>
+
+<h5>All meetings</h5>
+{% for m in meetings %}<form id="gp-form-{{ m.id }}" method="post" action="{{ url_for('gp_meeting_update', meeting_id=m.id) }}"></form>{% endfor %}
+<table class="table table-sm bg-white align-middle">
+  <thead><tr><th>Date</th><th>Start</th><th>End</th><th>Practice</th><th>Address</th><th>Status</th><th>Notes</th><th></th></tr></thead>
+  <tbody>
+    {% for m in meetings %}
+    <tr>
+      <td><input form="gp-form-{{ m.id }}" type="date" class="form-control form-control-sm" name="date" value="{{ m.date }}"></td>
+      <td><input form="gp-form-{{ m.id }}" type="text" class="form-control form-control-sm" name="time_start" value="{{ m.time_start }}" style="width:80px;"></td>
+      <td><input form="gp-form-{{ m.id }}" type="text" class="form-control form-control-sm" name="time_end" value="{{ m.time_end }}" style="width:80px;"></td>
+      <td><input form="gp-form-{{ m.id }}" type="text" class="form-control form-control-sm" name="practice_name" value="{{ m.practice_name }}"></td>
+      <td><input form="gp-form-{{ m.id }}" type="text" class="form-control form-control-sm" name="address" value="{{ m.address }}"></td>
+      <td><select form="gp-form-{{ m.id }}" class="form-select form-select-sm" name="status">
+        <option {% if m.status == 'Tentative' %}selected{% endif %}>Tentative</option>
+        <option {% if m.status == 'Confirmed' %}selected{% endif %}>Confirmed</option>
+      </select></td>
+      <td><input form="gp-form-{{ m.id }}" type="text" class="form-control form-control-sm" name="notes" value="{{ m.notes }}"></td>
+      <td class="text-nowrap">
+        <button form="gp-form-{{ m.id }}" class="btn btn-sm btn-outline-primary" type="submit">Save</button>
+        <form method="post" action="{{ url_for('gp_meeting_delete', meeting_id=m.id) }}" class="d-inline" onsubmit="return confirm('Delete this GP meeting?');">
+          <button class="btn btn-sm btn-outline-danger" type="submit">Delete</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+    {% if not meetings %}
+    <tr><td colspan="8" class="text-muted">No GP meetings tracked yet.</td></tr>
+    {% endif %}
+  </tbody>
+</table>
+{% endblock %}
