@@ -30,11 +30,13 @@ def narrative_analysis(api_key, data):
         'period': data['period_label'],
         'total_sessions': data['total_sessions'],
         'total_revenue': data['total_revenue'],
+        'total_time_units': data['total_time_units'],
         'group_breakdown': data['group_breakdown'],
         'site_breakdown': data['site_breakdown'],
+        'efficiency_worst_first': data['efficiency'],
         'flags': data['flags'],
         'rotation_weeks': data['rotation_weeks'],
-        'consult_scope_session_ratio': data['consult_scope_ratio'],
+        'consult_scope_time_ratio': data['consult_scope_ratio'],
         'referral_pipelines': data['pipelines'],
     }
     prompt = f"""You are analysing the practice schedule of a solo gastroenterologist (SHORE \
@@ -66,6 +68,13 @@ which repeats regardless of calendar month/year - NOT the same as calendar week-
 a Monday-Friday breakdown inside each. Use this to flag if a particular rotation week or weekday \
 is consistently under/over-performing.
 
+"Time units" measure actual time/effort, not raw slot counts: an AM or PM session = 1 unit, an \
+All-day session = 2 units by default (some sessions are manually weighted differently if they \
+run longer/shorter than normal, e.g. a 7:30am-4pm Scope weighted 2.5). `efficiency_worst_first` \
+lists sites sorted by $ earned per time unit, worst first - use this to flag sites where a lot \
+of time is being spent for comparatively little earning ("there for hours, no earning"), which \
+is a distinct concern from low session count (already covered by `flags`).
+
 Data (JSON):
 {json.dumps(payload, indent=2)}
 
@@ -73,8 +82,10 @@ Write a concise practical analysis in markdown with these sections: "Summary", "
 (comment on the FORHEALTH vs SHORE vs CDD vs Scopes split and what it means for income direction), \
 "Referral pipeline health" (comment specifically on both pipeline ratios using the logic above), \
 "Weekly rotation pattern" (any Week 1-4 or weekday-of-week pattern worth flagging, from \
-`rotation_weeks`), "Concerns" (utilization flags), and "Recommendations". Be specific, reference \
-real site/week names and numbers from the data. Keep it under 550 words."""
+`rotation_weeks`), "Time efficiency" (call out any site from `efficiency_worst_first` that's \
+consuming significant time for low $/time-unit return), "Concerns" (utilization flags), and \
+"Recommendations". Be specific, reference real site/week names and numbers from the data. Keep \
+it under 600 words."""
     resp = client.messages.create(
         model=NARRATIVE_MODEL,
         max_tokens=1500,

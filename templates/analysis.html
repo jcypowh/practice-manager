@@ -31,48 +31,75 @@
   </div>
   <div class="col-auto">
     <div class="card"><div class="card-body py-2 px-3">
-      <div class="text-muted small">Consult : Scope session ratio</div>
+      <div class="text-muted small">Consult : Scope time-spent ratio</div>
       <div class="fs-4 fw-bold">{% if data.consult_scope_ratio %}{{ data.consult_scope_ratio }} : 1{% else %}—{% endif %}</div>
-      <div class="text-muted" style="font-size:.7rem;">CDD excluded (does both, own entity)</div>
+      <div class="text-muted" style="font-size:.7rem;">By time, not raw slots - CDD excluded (does both, own entity)</div>
     </div></div>
   </div>
 </div>
 
+<p class="text-muted small"><i class="fa-regular fa-clock"></i> <strong>Time units</strong> below measure actual time/effort, not raw slot counts: an AM or PM session = 1, an All-day session = 2 (e.g. Dee Why's all-day Scope counts as 2, not 1). A session can be manually weighted differently if it runs longer/shorter than normal (e.g. Freshwater's 7:30am-4pm Scope is weighted 2.5) - edit this from the block on the Board.</p>
+
 <h5>Revenue by group</h5>
 <p class="text-muted small">FORHEALTH Medical Centre (corporate rooms) → SHORE Gastroenterology (Mater/NBH Clinic) → CDD (one entity, not split) → Scopes (ESPH, Freshwater, Dee Why, Mater Scope) — in that order, so you can see direction at a glance.</p>
-<table class="table table-sm bg-white">
-  <thead><tr><th>Group</th><th>Sessions</th><th>Revenue</th><th>% of total</th><th>Avg $/session</th></tr></thead>
-  <tbody>
-    {% for g in data.group_breakdown %}
-    <tr>
-      <td>{{ g.group }}</td>
-      <td>{{ g.sessions }}</td>
-      <td>${{ '%.0f'|format(g.revenue) }}</td>
-      <td>{{ g.pct }}%</td>
-      <td>${{ '%.0f'|format(g.avg_revenue_per_session) }}</td>
-    </tr>
-    {% endfor %}
-  </tbody>
-</table>
+<div class="row">
+  <div class="col-md-7">
+    <table class="table table-sm bg-white">
+      <thead><tr><th>Group</th><th>Sessions</th><th>Time units</th><th>Revenue</th><th>% of total</th><th>$/session</th><th>$/time-unit</th></tr></thead>
+      <tbody>
+        {% for g in data.group_breakdown %}
+        <tr>
+          <td>{{ g.group }}</td>
+          <td>{{ g.sessions }}</td>
+          <td>{{ g.time_units }}</td>
+          <td>${{ '%.0f'|format(g.revenue) }}</td>
+          <td>{{ g.pct }}%</td>
+          <td>${{ '%.0f'|format(g.avg_revenue_per_session) }}</td>
+          <td>${{ '%.0f'|format(g.revenue_per_time_unit) }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="col-md-5">
+    <canvas id="groupRevenueChart" style="max-height: 260px;"></canvas>
+  </div>
+</div>
 
 <div class="row">
   <div class="col-md-6">
     <h5>Revenue by site</h5>
     <table class="table table-sm bg-white">
-      <thead><tr><th>Site</th><th>Sessions</th><th>Revenue</th><th>% of total</th></tr></thead>
+      <thead><tr><th>Site</th><th>Sessions</th><th>Time units</th><th>Revenue</th><th>% of total</th></tr></thead>
       <tbody>
         {% for b in data.site_breakdown %}
-        <tr><td>{{ b.site }}</td><td>{{ b.sessions }}</td><td>${{ '%.0f'|format(b.revenue) }}</td><td>{{ b.pct }}%</td></tr>
+        <tr><td>{{ b.site }}</td><td>{{ b.sessions }}</td><td>{{ b.time_units }}</td><td>${{ '%.0f'|format(b.revenue) }}</td><td>{{ b.pct }}%</td></tr>
         {% endfor %}
       </tbody>
     </table>
   </div>
   <div class="col-md-6">
-    <h5>Session mix - {{ data.period_label }}</h5>
-    <p class="text-muted small">Consult (FORHEALTH + SHORE Gastro) vs Scope (ESPH + Freshwater + Dee Why + Mater Scope). CDD shown separately since it's a mix of both.</p>
+    <h5>Time spent mix - {{ data.period_label }}</h5>
+    <p class="text-muted small">Consult (FORHEALTH + SHORE Gastro) vs Scope (ESPH + Freshwater + Dee Why + Mater Scope), by time units. CDD shown separately since it's a mix of both.</p>
     <canvas id="sessionMixChart" style="max-height: 260px;"></canvas>
   </div>
 </div>
+
+<h5 class="mt-4">Earning-per-time-spent efficiency</h5>
+<p class="text-muted small">Sites sorted worst-first by $ earned per time unit - flags "spending hours somewhere for little return", separate from the utilization flags below (which are about session count, not earning).</p>
+<table class="table table-sm bg-white">
+  <thead><tr><th>Site</th><th>Time units</th><th>Revenue</th><th>$ per time-unit</th></tr></thead>
+  <tbody>
+    {% for b in data.efficiency %}
+    <tr class="{{ 'table-warning' if loop.index <= 3 and b.revenue_per_time_unit < (data.total_revenue / data.total_time_units if data.total_time_units else 0) else '' }}">
+      <td>{{ b.site }}</td>
+      <td>{{ b.time_units }}</td>
+      <td>${{ '%.0f'|format(b.revenue) }}</td>
+      <td>${{ '%.0f'|format(b.revenue_per_time_unit) }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
 
 <h5 class="mt-4">Referral pipelines</h5>
 <p class="text-muted small">Consult work at the source sites is what generates scope bookings at the associated target sites. A healthy pipeline converts a reasonable share of consults into scope bookings — a ratio like 10:1 would be a warning sign, not a good one.</p>
@@ -141,14 +168,26 @@ new Chart(document.getElementById('sessionMixChart'), {
     labels: ['Consult (FORHEALTH + SHORE Gastro)', 'Scope', 'CDD (mixed)'],
     datasets: [{
       data: [
-        {{ data.consult_sessions }},
-        {{ data.scope_sessions }},
-        {{ (data.group_breakdown | selectattr('group', 'equalto', 'CDD') | first).sessions if (data.group_breakdown | selectattr('group', 'equalto', 'CDD') | list) else 0 }}
+        {{ data.consult_time_units }},
+        {{ data.scope_time_units }},
+        {{ data.cdd_time_units }}
       ],
       backgroundColor: ['#e67e22', '#2980b9', '#8e44ad']
     }]
   },
   options: { plugins: { legend: { position: 'bottom' } } }
+});
+
+new Chart(document.getElementById('groupRevenueChart'), {
+  type: 'pie',
+  data: {
+    labels: [{% for g in data.group_breakdown %}'{{ g.group }}',{% endfor %}],
+    datasets: [{
+      data: [{% for g in data.group_breakdown %}{{ g.revenue }},{% endfor %}],
+      backgroundColor: ['#e67e22', '#27ae60', '#8e44ad', '#2980b9', '#95a5a6']
+    }]
+  },
+  options: { plugins: { legend: { position: 'bottom' }, title: { display: true, text: 'Revenue by group' } } }
 });
 </script>
 {% endif %}

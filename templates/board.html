@@ -38,6 +38,7 @@
 <div class="block-box" data-id="{{ b.id }}" style="--box-color: {{ b.color }}"
      data-location-id="{{ b.location_id }}" data-activity="{{ b.activity }}" data-slot="{{ b.slot }}"
      data-current-value="{{ b.value_formula if b.value_formula else (b.value or 0) }}"
+     data-time-weight="{{ b.time_weight if b.time_weight is not none else b.time_weight_effective }}"
      data-notes="{{ b.notes }}" data-label="{{ b.location_name }} - {{ b.activity }}">
   <strong>{{ b.location_name }}</strong> {{ b.activity }} <span class="block-value">${{ '%.0f'|format(b.value or 0) }}</span>
   {% if b.time_note %}<span class="block-time"><i class="fa-regular fa-clock"></i> {{ b.time_note }}</span>{% endif %}
@@ -105,6 +106,7 @@
     <div class="block-box" data-id="{{ b.id }}" style="--box-color: {{ b.color }}; min-width: 160px;"
          data-location-id="{{ b.location_id }}" data-activity="{{ b.activity }}" data-slot="{{ b.slot }}"
          data-current-value="{{ b.value_formula if b.value_formula else (b.value or 0) }}"
+         data-time-weight="{{ b.time_weight if b.time_weight is not none else b.time_weight_effective }}"
          data-notes="{{ b.notes }}" data-label="{{ b.location_name }} - {{ b.activity }}">
       <strong>{{ b.location_name }}</strong> {{ b.activity }} <small>{{ b.date }} {{ b.slot }}</small>
     </div>
@@ -162,6 +164,11 @@
           <input type="text" class="form-control" id="editBlockValue" placeholder="e.g. 2300*0.75">
           <div class="form-text" id="editBlockValueHint">Applies to every session at this site + activity, in every month — not just this one.</div>
         </div>
+        <div class="mb-2">
+          <label class="form-label">Time weight (this session only, half-days - AM/PM = 1, All day = 2)</label>
+          <input type="text" class="form-control" id="editBlockTimeWeight" placeholder="e.g. 2.5">
+          <div class="form-text">How much of a day this actually takes. Only change this if the session runs longer/shorter than normal (e.g. a Scope running 7:30am-4pm might be worth 2.5). Used for the time/effort-based analysis charts, not for pricing.</div>
+        </div>
         <div class="mb-2"><label class="form-label">Notes (this session only)</label>
           <textarea class="form-control" id="editBlockNotes" rows="3"></textarea></div>
       </div>
@@ -202,6 +209,7 @@ document.addEventListener('click', (ev) => {
   document.getElementById('editBlockOrigActivity').value = box.dataset.activity;
   document.getElementById('editBlockActivity').value = box.dataset.activity;
   document.getElementById('editBlockValue').value = box.dataset.currentValue || '';
+  document.getElementById('editBlockTimeWeight').value = box.dataset.timeWeight || '';
   document.getElementById('editBlockNotes').value = box.dataset.notes || '';
   document.getElementById('editBlockLabel').textContent = box.dataset.label || 'Edit block';
   document.getElementById('editBlockValueHint').textContent = box.dataset.slot === 'All day'
@@ -216,6 +224,7 @@ document.getElementById('editBlockSave').addEventListener('click', () => {
   const origActivity = document.getElementById('editBlockOrigActivity').value;
   const activity = document.getElementById('editBlockActivity').value.trim();
   const value = document.getElementById('editBlockValue').value;
+  const timeWeight = document.getElementById('editBlockTimeWeight').value;
   const notes = document.getElementById('editBlockNotes').value;
 
   const steps = [];
@@ -226,9 +235,11 @@ document.getElementById('editBlockSave').addEventListener('click', () => {
   Promise.all(steps).then(() => Promise.all([
     fetch('/location-rate/set-value', {method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({location_id: locationId, activity: activity || origActivity, slot: slot, value: value})}),
+    fetch(`/block/${id}/set-time-weight`, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({time_weight: timeWeight})}),
     fetch(`/block/${id}/set-notes`, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({notes: notes})}),
-  ])).then(res => Promise.all(res.map(r => r.json()))).then(([valueRes, notesRes]) => {
+  ])).then(res => Promise.all(res.map(r => r.json()))).then(([valueRes, timeWeightRes, notesRes]) => {
     if (!valueRes.ok) { alert(valueRes.error || 'Could not save value'); return; }
+    if (!timeWeightRes.ok) { alert(timeWeightRes.error || 'Could not save time weight'); return; }
     location.reload();
   });
 });

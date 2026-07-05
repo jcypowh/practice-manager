@@ -219,6 +219,7 @@ def init_db():
         activity_raw    TEXT DEFAULT '',
         time_note       TEXT DEFAULT '',
         value_override  REAL,
+        time_weight     REAL,
         status          TEXT DEFAULT 'scheduled',
         notes           TEXT DEFAULT '',
         source          TEXT DEFAULT 'import',
@@ -249,6 +250,7 @@ def init_db():
         "ALTER TABLE location_activity_rates ADD COLUMN am_value_formula TEXT DEFAULT ''",
         "ALTER TABLE location_activity_rates ADD COLUMN pm_value_formula TEXT DEFAULT ''",
         "ALTER TABLE location_activity_rates ADD COLUMN allday_value_formula TEXT DEFAULT ''",
+        "ALTER TABLE blocks ADD COLUMN time_weight REAL",
     ]:
         try:
             db.execute(stmt)
@@ -303,6 +305,16 @@ def _slot_formula(rate, slot):
         return ''
     return {'AM': rate['am_value_formula'], 'PM': rate['pm_value_formula']}.get(
         slot, rate['allday_value_formula']) or ''
+
+
+def _effective_time_weight(time_weight_override, slot):
+    """How much of a 'day' a block represents, in half-day units: AM/PM = 1, All day = 2
+    by default. A block can override this (e.g. Freshwater's 7:30am-4pm Scope session is
+    longer than a normal AM slot, so it's manually weighted at 2.5) - used anywhere we're
+    measuring time/effort spent rather than counting raw slots."""
+    if time_weight_override is not None:
+        return time_weight_override
+    return 2.0 if slot == 'All day' else 1.0
 
 
 def get_or_create_location(db, name):
@@ -365,8 +377,8 @@ def upsert_block(db, month_id, row):
 
 
 _BLOCK_COLS = ['id', 'month_id', 'date', 'day_name', 'slot', 'location_id', 'activity',
-               'activity_raw', 'time_note', 'value_override', 'status', 'notes', 'source',
-               'created_at', 'updated_at']
+               'activity_raw', 'time_note', 'value_override', 'time_weight', 'status', 'notes',
+               'source', 'created_at', 'updated_at']
 
 
 def has_pending_changes(db, month_id):
@@ -431,7 +443,9 @@ def get_board_data(db, month_id):
         value = _effective_value(b['value_override'], rate, b['default_am_value'],
                                   b['default_pm_value'], b['default_allday_value'], b['slot'])
         value_formula = _slot_formula(rate, b['slot'])
-        by_date.setdefault(b['date'], []).append(dict(b, color=color, value=value, value_formula=value_formula))
+        time_weight = _effective_time_weight(b['time_weight'], b['slot'])
+        by_date.setdefault(b['date'], []).append(
+            dict(b, color=color, value=value, value_formula=value_formula, time_weight_effective=time_weight))
 
     dates = sorted(by_date.keys())
     if not dates:
@@ -475,7 +489,8 @@ def get_hold_blocks(db):
         rate = rate_map.get((b['location_id'], b['activity']))
         color = _effective_color(rate, b['location_color'])
         value_formula = _slot_formula(rate, b['slot'])
-        out.append(dict(b, color=color, value_formula=value_formula))
+        time_weight = _effective_time_weight(b['time_weight'], b['slot'])
+        out.append(dict(b, color=color, value_formula=value_formula, time_weight_effective=time_weight))
     return out
 
 
@@ -530,7 +545,7 @@ def _compute_analysis(db, period):
     placeholders = ','.join('?' * len(month_ids))
     rows = db.execute(f'''
         SELECT l.id as location_id, l.name as location_name, l.category as category,
-               b.date, b.value_override, b.slot, b.activity,
+               b.date, b.value_override, b.slot, b.activity, b.time_weight,
                l.default_am_value, l.default_pm_value, l.default_allday_value
         FROM blocks b JOIN locations l ON l.id = b.location_id
         WHERE b.month_id IN ({placeholders}) AND b.status != 'hold'
@@ -545,10 +560,10 @@ def _compute_analysis(db, period):
     rates = db.execute('SELECT * FROM location_activity_rates').fetchall()
     rate_map = {(r['location_id'], r['activity']): r for r in rates}
 
-    site_counts, site_totals = {}, {}
+    site_counts, site_totals, site_time_units = {}, {}, {}
     site_activity_counts, site_activity_totals = {}, {}
-    group_counts, group_totals = {}, {}
-    total_sessions, total_revenue = 0, 0.0
+    group_counts, group_totals, group_time_units = {}, {}, {}
+    total_sessions, total_revenue, total_time_units = 0, 0.0, 0.0
 
     # Rotation-week breakdown (Week 1-4) rather than calendar-week-starting dates: the
     # rotation label is stable across months/years, so this is the useful frame for
@@ -561,9 +576,11 @@ def _compute_analysis(db, period):
         rate = rate_map.get((r['location_id'], r['activity']))
         value = _effective_value(r['value_override'], rate, r['default_am_value'],
                                   r['default_pm_value'], r['default_allday_value'], r['slot'])
+        weight = _effective_time_weight(r['time_weight'], r['slot'])
         name = r['location_name']
         site_counts[name] = site_counts.get(name, 0) + 1
         site_totals[name] = site_totals.get(name, 0.0) + value
+        site_time_units[name] = site_time_units.get(name, 0.0) + weight
         key = (name, r['activity'])
         site_activity_counts[key] = site_activity_counts.get(key, 0) + 1
         site_activity_totals[key] = site_activity_totals.get(key, 0.0) + value
@@ -571,9 +588,11 @@ def _compute_analysis(db, period):
         group = classify_group(r['category'], r['activity'])
         group_counts[group] = group_counts.get(group, 0) + 1
         group_totals[group] = group_totals.get(group, 0.0) + value
+        group_time_units[group] = group_time_units.get(group, 0.0) + weight
 
         total_sessions += 1
         total_revenue += value
+        total_time_units += weight
 
         d = datetime.date.fromisoformat(r['date'])
         monday = d - datetime.timedelta(days=d.weekday())
@@ -590,29 +609,48 @@ def _compute_analysis(db, period):
     site_breakdown = []
     for site, rev in sorted(site_totals.items(), key=lambda x: -x[1]):
         cnt = site_counts[site]
+        tu = site_time_units.get(site, 0.0)
         site_breakdown.append({
             'site': site, 'sessions': cnt, 'revenue': rev,
             'pct': round(100 * rev / total_revenue, 1) if total_revenue else 0.0,
             'avg_per_month': round(cnt / n_months, 2),
+            'time_units': tu,
+            'revenue_per_time_unit': round(rev / tu, 2) if tu else 0.0,
         })
 
     group_breakdown = []
     for group in GROUP_ORDER + (['Other'] if group_counts.get('Other') else []):
         cnt = group_counts.get(group, 0)
         rev = group_totals.get(group, 0.0)
+        tu = group_time_units.get(group, 0.0)
         group_breakdown.append({
             'group': group, 'sessions': cnt, 'revenue': rev,
             'pct': round(100 * rev / total_revenue, 1) if total_revenue else 0.0,
             'avg_revenue_per_session': round(rev / cnt, 2) if cnt else 0.0,
+            'time_units': tu,
+            'revenue_per_time_unit': round(rev / tu, 2) if tu else 0.0,
         })
 
-    # Scope vs consult session ratio - CDD deliberately excluded (it does both, and isn't
-    # part of either referral pipeline below), matching the user's own framing.
+    # Efficiency table: $ earned per half-day-equivalent time unit spent, sites/sites with
+    # real time logged only, worst (lowest $/time-unit) first - flags "there for hours,
+    # earning little" rather than just low session count (which utilization flags already cover).
+    efficiency = sorted(
+        (b for b in site_breakdown if b['time_units']),
+        key=lambda b: b['revenue_per_time_unit']
+    )
+
+    # Scope vs consult time-spent ratio (in half-day-equivalent units, not raw slot counts,
+    # so a Dee Why all-day counts as 2 and Freshwater's extended day counts as its real
+    # weight) - CDD deliberately excluded (it does both, and isn't part of either referral
+    # pipeline below), matching the user's own framing.
     scope_sessions = group_counts.get('Scopes', 0)
     consult_sessions = group_counts.get('FORHEALTH Medical Centre', 0) + group_counts.get('SHORE Gastroenterology', 0)
+    scope_time_units = group_time_units.get('Scopes', 0.0)
+    consult_time_units = group_time_units.get('FORHEALTH Medical Centre', 0.0) + group_time_units.get('SHORE Gastroenterology', 0.0)
+    cdd_time_units = group_time_units.get('CDD', 0.0)
     scope_revenue = group_totals.get('Scopes', 0.0)
     consult_revenue = group_totals.get('FORHEALTH Medical Centre', 0.0) + group_totals.get('SHORE Gastroenterology', 0.0)
-    consult_scope_ratio = round(consult_sessions / scope_sessions, 1) if scope_sessions else None
+    consult_scope_ratio = round(consult_time_units / scope_time_units, 1) if scope_time_units else None
 
     under_threshold = float(cfg('utilization_flag_threshold', '1') or 1)
     over_threshold = float(cfg('analysis_overbook_threshold', '10') or 10)
@@ -649,12 +687,17 @@ def _compute_analysis(db, period):
         'n_months': n_months,
         'total_sessions': total_sessions,
         'total_revenue': total_revenue,
+        'total_time_units': total_time_units,
         'site_breakdown': site_breakdown,
         'group_breakdown': group_breakdown,
+        'efficiency': efficiency,
         'flags': flags,
         'rotation_weeks': rotation_weeks,
         'scope_sessions': scope_sessions,
         'consult_sessions': consult_sessions,
+        'scope_time_units': scope_time_units,
+        'consult_time_units': consult_time_units,
+        'cdd_time_units': cdd_time_units,
         'scope_revenue': scope_revenue,
         'consult_revenue': consult_revenue,
         'consult_scope_ratio': consult_scope_ratio,
@@ -755,6 +798,30 @@ def set_block_notes(block_id):
         ensure_snapshot(db, month_id)
     db.execute('UPDATE blocks SET notes=?, updated_at=CURRENT_TIMESTAMP WHERE id=?',
                (data.get('notes', ''), block_id))
+    db.commit()
+    return jsonify({'ok': True})
+
+
+@app.route('/block/<int:block_id>/set-time-weight', methods=['POST'])
+def set_block_time_weight(block_id):
+    """How much of a 'day' THIS specific session represents, in half-day units (AM/PM
+    default to 1, All day defaults to 2) - for sessions that run longer or shorter than
+    the norm (e.g. a Scope that runs 7:30am-4pm), so time/effort-based analysis reflects
+    reality rather than just counting slots. Blank clears the override back to the default."""
+    data = request.get_json(silent=True) or {}
+    raw = data.get('time_weight', None)
+    db = get_db()
+    month_id = block_month_id(db, block_id)
+    if month_id:
+        ensure_snapshot(db, month_id)
+    if raw in (None, ''):
+        db.execute('UPDATE blocks SET time_weight=NULL, updated_at=CURRENT_TIMESTAMP WHERE id=?', (block_id,))
+    else:
+        try:
+            weight = float(raw)
+        except (TypeError, ValueError):
+            return jsonify({'ok': False, 'error': 'Time weight must be a number'}), 400
+        db.execute('UPDATE blocks SET time_weight=?, updated_at=CURRENT_TIMESTAMP WHERE id=?', (weight, block_id))
     db.commit()
     return jsonify({'ok': True})
 
