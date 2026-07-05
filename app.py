@@ -78,6 +78,45 @@ SEED_LOCATIONS = [
 ]
 SCOPE_SITES = ['CDD', 'Mater', 'ESPH', 'Freshwater', 'Dee Why']
 
+# Four top-level groups for the Analysis page, in the display order the user wants.
+# CDD is deliberately never split by activity (it's one entity). Mater is the one site
+# that genuinely straddles two groups: its Clinic sessions are "SHORE Gastroenterology"
+# but its Scope sessions are "Scopes" - so classification must check activity first.
+GROUP_ORDER = ['FORHEALTH Medical Centre', 'SHORE Gastroenterology', 'CDD', 'Scopes']
+
+
+def classify_group(category, activity):
+    if category == 'cdd':
+        return 'CDD'
+    if activity == 'Scope':
+        return 'Scopes'
+    if category == 'shore_own':
+        return 'SHORE Gastroenterology'
+    if category == 'corporate':
+        return 'FORHEALTH Medical Centre'
+    return 'Other'
+
+
+# Referral pipelines: consult/clinic work at the "source" sites is what generates scope
+# bookings at the associated "target" sites. Used both for the on-page ratio and as
+# context fed to Claude so it understands this practice's specific referral logic.
+REFERRAL_PIPELINES = [
+    {
+        'label': 'Chatswood + Brookvale + SHORE Gastro → Mater Scope / Freshwater / Dee Why',
+        'source_sites': ['Chatswood', 'Brookvale'],
+        'source_group': 'SHORE Gastroenterology',
+        'target_sites': ['Freshwater', 'Dee Why'],
+        'target_site_activity': [('Mater', 'Scope')],
+    },
+    {
+        'label': 'Darlinghurst + Leichhardt + Maroubra + Blacktown → East Sydney Private (ESPH)',
+        'source_sites': ['Darlinghurst', 'Leichhardt', 'Maroubra', 'Blacktown'],
+        'source_group': None,
+        'target_sites': ['ESPH'],
+        'target_site_activity': [],
+    },
+]
+
 # The practice runs a perpetual 4-week rotation (Week 1-4) that is NOT tied to
 # calendar week-of-year - it just keeps cycling regardless of month boundaries.
 # Anchored against the real source files: Monday 2026-08-03 is confirmed "Week 2".
@@ -465,71 +504,148 @@ def compute_earnings(db, month_id):
     return {'weekly': sorted(weekly.items()), 'by_site': sorted(by_site.items(), key=lambda x: -x[1]), 'total': total}
 
 
-def _compute_analysis(db):
-    trailing = int(float(cfg('analysis_trailing_months', '3') or 3))
-    under_threshold = float(cfg('utilization_flag_threshold', '1') or 1)
-    over_threshold = float(cfg('analysis_overbook_threshold', '10') or 10)
-
-    today = datetime.date.today()
-    cutoff_month = today.month - trailing
-    cutoff_year = today.year
-    while cutoff_month <= 0:
-        cutoff_month += 12
-        cutoff_year -= 1
-    cutoff_ym = cutoff_year * 100 + cutoff_month
-
-    months = db.execute("SELECT * FROM months WHERE status != 'archived' ORDER BY year, month").fetchall()
-    window_months = [m for m in months if (m['year'] * 100 + m['month']) >= cutoff_ym] or list(months)
-    published_only = [m for m in window_months if m['status'] == 'published']
-    use_months = published_only if published_only else window_months
-    month_ids = [m['id'] for m in use_months]
-    n_months = max(len(use_months), 1)
+def _compute_analysis(db, period):
+    """period is either a specific month_id (int) or the literal string 'all' (whole year -
+    every non-archived month combined). Returns one dict with everything the Analysis page
+    and the Claude narrative both need, or None if there's no data yet for that scope."""
+    ym_prefix = None
+    if period == 'all':
+        months = db.execute("SELECT * FROM months WHERE status != 'archived' ORDER BY year, month").fetchall()
+        month_ids = [m['id'] for m in months]
+        n_months = len(months) or 1
+        period_label = 'Whole year'
+    else:
+        month = db.execute('SELECT * FROM months WHERE id=?', (period,)).fetchone()
+        month_ids = [month['id']] if month else []
+        n_months = 1
+        period_label = month['label'] if month else 'Unknown month'
+        if month:
+            ym_prefix = f"{month['year']:04d}-{month['month']:02d}"
 
     if not month_ids:
-        return [], [], [], 0
+        return None
 
     placeholders = ','.join('?' * len(month_ids))
     rows = db.execute(f'''
-        SELECT l.id as location_id, l.name as location_name, b.date, b.value_override, b.slot, b.activity,
+        SELECT l.id as location_id, l.name as location_name, l.category as category,
+               b.date, b.value_override, b.slot, b.activity,
                l.default_am_value, l.default_pm_value, l.default_allday_value
         FROM blocks b JOIN locations l ON l.id = b.location_id
         WHERE b.month_id IN ({placeholders}) AND b.status != 'hold'
     ''', month_ids).fetchall()
+    if ym_prefix:
+        # A single-month view should only count that month's own days - a boundary week's
+        # spillover into the next month (e.g. August's board showing early September)
+        # belongs in that OTHER month's analysis, not here. "Whole year" has no such
+        # exclusion since every day belongs to the year regardless.
+        rows = [r for r in rows if r['date'].startswith(ym_prefix)]
 
     rates = db.execute('SELECT * FROM location_activity_rates').fetchall()
     rate_map = {(r['location_id'], r['activity']): r for r in rates}
 
-    site_counts, site_totals, weekly_totals = {}, {}, {}
+    site_counts, site_totals = {}, {}
+    site_activity_counts, site_activity_totals = {}, {}
+    group_counts, group_totals = {}, {}
+    weekly_totals = {}
+    total_sessions, total_revenue = 0, 0.0
+
     for r in rows:
         rate = rate_map.get((r['location_id'], r['activity']))
         value = _effective_value(r['value_override'], rate, r['default_am_value'],
                                   r['default_pm_value'], r['default_allday_value'], r['slot'])
-        site_counts[r['location_name']] = site_counts.get(r['location_name'], 0) + 1
-        site_totals[r['location_name']] = site_totals.get(r['location_name'], 0.0) + value
+        name = r['location_name']
+        site_counts[name] = site_counts.get(name, 0) + 1
+        site_totals[name] = site_totals.get(name, 0.0) + value
+        key = (name, r['activity'])
+        site_activity_counts[key] = site_activity_counts.get(key, 0) + 1
+        site_activity_totals[key] = site_activity_totals.get(key, 0.0) + value
+
+        group = classify_group(r['category'], r['activity'])
+        group_counts[group] = group_counts.get(group, 0) + 1
+        group_totals[group] = group_totals.get(group, 0.0) + value
+
+        total_sessions += 1
+        total_revenue += value
+
         d = datetime.date.fromisoformat(r['date'])
         monday = (d - datetime.timedelta(days=d.weekday())).isoformat()
         wk = weekly_totals.setdefault(monday, {'sessions': 0, 'value': 0.0})
         wk['sessions'] += 1
         wk['value'] += value
 
-    breakdown = []
-    for site, cnt in sorted(site_counts.items()):
-        breakdown.append({
-            'site': site, 'sessions': cnt,
+    site_breakdown = []
+    for site, rev in sorted(site_totals.items(), key=lambda x: -x[1]):
+        cnt = site_counts[site]
+        site_breakdown.append({
+            'site': site, 'sessions': cnt, 'revenue': rev,
+            'pct': round(100 * rev / total_revenue, 1) if total_revenue else 0.0,
             'avg_per_month': round(cnt / n_months, 2),
-            'total_value': site_totals.get(site, 0.0),
         })
 
+    group_breakdown = []
+    for group in GROUP_ORDER + (['Other'] if group_counts.get('Other') else []):
+        cnt = group_counts.get(group, 0)
+        rev = group_totals.get(group, 0.0)
+        group_breakdown.append({
+            'group': group, 'sessions': cnt, 'revenue': rev,
+            'pct': round(100 * rev / total_revenue, 1) if total_revenue else 0.0,
+            'avg_revenue_per_session': round(rev / cnt, 2) if cnt else 0.0,
+        })
+
+    # Scope vs consult session ratio - CDD deliberately excluded (it does both, and isn't
+    # part of either referral pipeline below), matching the user's own framing.
+    scope_sessions = group_counts.get('Scopes', 0)
+    consult_sessions = group_counts.get('FORHEALTH Medical Centre', 0) + group_counts.get('SHORE Gastroenterology', 0)
+    scope_revenue = group_totals.get('Scopes', 0.0)
+    consult_revenue = group_totals.get('FORHEALTH Medical Centre', 0.0) + group_totals.get('SHORE Gastroenterology', 0.0)
+    consult_scope_ratio = round(consult_sessions / scope_sessions, 1) if scope_sessions else None
+
+    under_threshold = float(cfg('utilization_flag_threshold', '1') or 1)
+    over_threshold = float(cfg('analysis_overbook_threshold', '10') or 10)
     flags = []
-    for b in breakdown:
+    for b in site_breakdown:
         if b['avg_per_month'] <= under_threshold:
             flags.append({'site': b['site'], 'type': 'under-utilized',
-                          'detail': f"{b['sessions']} session(s) across last {n_months} month(s) (avg {b['avg_per_month']}/month)"})
+                          'detail': f"{b['sessions']} session(s) - avg {b['avg_per_month']}/month"})
         elif b['avg_per_month'] >= over_threshold:
             flags.append({'site': b['site'], 'type': 'over-booked',
-                          'detail': f"{b['sessions']} session(s) across last {n_months} month(s) (avg {b['avg_per_month']}/month)"})
+                          'detail': f"{b['sessions']} session(s) - avg {b['avg_per_month']}/month"})
 
-    return breakdown, flags, sorted(weekly_totals.items()), n_months
+    pipelines = []
+    for p in REFERRAL_PIPELINES:
+        source_sessions = sum(site_counts.get(s, 0) for s in p['source_sites'])
+        source_revenue = sum(site_totals.get(s, 0.0) for s in p['source_sites'])
+        if p['source_group']:
+            source_sessions += group_counts.get(p['source_group'], 0)
+            source_revenue += group_totals.get(p['source_group'], 0.0)
+        target_sessions = sum(site_counts.get(s, 0) for s in p['target_sites'])
+        target_revenue = sum(site_totals.get(s, 0.0) for s in p['target_sites'])
+        for key in p['target_site_activity']:
+            target_sessions += site_activity_counts.get(key, 0)
+            target_revenue += site_activity_totals.get(key, 0.0)
+        pipelines.append({
+            'label': p['label'],
+            'source_sessions': source_sessions, 'source_revenue': source_revenue,
+            'target_sessions': target_sessions, 'target_revenue': target_revenue,
+            'ratio': round(source_sessions / target_sessions, 1) if target_sessions else None,
+        })
+
+    return {
+        'period_label': period_label,
+        'n_months': n_months,
+        'total_sessions': total_sessions,
+        'total_revenue': total_revenue,
+        'site_breakdown': site_breakdown,
+        'group_breakdown': group_breakdown,
+        'flags': flags,
+        'weekly': sorted(weekly_totals.items()),
+        'scope_sessions': scope_sessions,
+        'consult_sessions': consult_sessions,
+        'scope_revenue': scope_revenue,
+        'consult_revenue': consult_revenue,
+        'consult_scope_ratio': consult_scope_ratio,
+        'pipelines': pipelines,
+    }
 
 
 # ---------------------------------------------------------------- Board routes
@@ -994,29 +1110,41 @@ def earnings_page():
 
 # ---------------------------------------------------------------- Analysis
 
+def _resolve_period(raw, months):
+    if raw == 'all':
+        return 'all'
+    if raw and raw.isdigit():
+        return int(raw)
+    return months[0]['id'] if months else 'all'
+
+
 @app.route('/analysis')
 def analysis_page():
     db = get_db()
-    breakdown, flags, weekly, n_months = _compute_analysis(db)
-    return render_template('analysis.html', breakdown=breakdown, flags=flags, weekly=weekly,
-                           n_months=n_months, narrative=None)
+    months = db.execute("SELECT * FROM months WHERE status != 'archived' ORDER BY year DESC, month DESC").fetchall()
+    period = _resolve_period(request.args.get('period'), months)
+    data = _compute_analysis(db, period)
+    return render_template('analysis.html', data=data, months=months, period=period, narrative=None)
 
 
 @app.route('/analysis/claude', methods=['POST'])
 def analysis_claude():
     db = get_db()
-    breakdown, flags, weekly, n_months = _compute_analysis(db)
+    months = db.execute("SELECT * FROM months WHERE status != 'archived' ORDER BY year DESC, month DESC").fetchall()
+    period = _resolve_period(request.form.get('period'), months)
+    data = _compute_analysis(db, period)
     api_key = cfg('claude_api_key')
     narrative = None
     if not api_key:
         flash('Set your Claude API key in Settings first.', 'warning')
+    elif not data:
+        flash('No data for this period yet.', 'warning')
     else:
         try:
-            narrative = claude_integration.narrative_analysis(api_key, breakdown, flags, weekly, n_months)
+            narrative = claude_integration.narrative_analysis(api_key, data)
         except Exception as e:
             flash(f'Claude request failed: {e}', 'danger')
-    return render_template('analysis.html', breakdown=breakdown, flags=flags, weekly=weekly,
-                           n_months=n_months, narrative=narrative)
+    return render_template('analysis.html', data=data, months=months, period=period, narrative=narrative)
 
 
 # ---------------------------------------------------------------- Claude schedule generation
