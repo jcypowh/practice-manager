@@ -37,7 +37,22 @@ starves for referrals.
 "Time units" measure actual time/effort, not raw slot counts: an AM or PM session = 1 unit, an \
 All-day session = 2 units by default (some sessions are manually weighted differently if they \
 run longer/shorter than normal, e.g. a 7:30am-4pm Scope weighted 2.5). $/time-unit is the true \
-earning-efficiency measure - prefer it over raw session counts when ranking sites."""
+earning-efficiency measure - prefer it over raw session counts when ranking sites.
+
+HARD CONSTRAINT - SHORE Gastroenterology is protected: it is a new, still-growing venture (its \
+own "baby startup") and must NEVER be suggested for reduction, cancellation, or sacrifice, in any \
+scenario, for any reason - not to free up time for something else, not to balance a pipeline, not \
+for any trade-off. If a scenario requires giving something up, the sacrifice always comes from \
+FORHEALTH Medical Centre first (it's already earmarked to shrink), then other lower-yield sites, \
+NEVER from SHORE Gastroenterology.
+
+Travel note: Dr Tu can take overnight (redeye) flights - e.g. Sydney-Taipei is a common example - \
+which means a departure late in the evening doesn't cost that day's PM session (he can still work \
+it, then fly out that night), and an early-morning arrival on return doesn't cost that day's PM \
+session either (he can land and still make an afternoon session, or occasionally even a full day \
+depending on connection times). When suggesting leave around travel, favour a plan built around \
+this pattern (work a normal day → evening flight out; land early morning on the return day → work \
+that day's PM session) over assuming a full extra day is lost on each end - it usually isn't."""
 
 
 def _client(api_key):
@@ -105,10 +120,12 @@ it under 600 words."""
 def suggest_days_off(api_key, rotation_weeks, num_days, period_label):
     prompt = f"""{PRACTICE_KNOWLEDGE}
 
-Dr Tu wants to take {num_days} consecutive CALENDAR days off as leave (not just business days). \
-Weekends already have no scheduled work, so a window that includes a weekend gets "free" rest \
-days that cost nothing in earnings - always prefer a window that overlaps a Saturday/Sunday over \
-one that doesn't, if the earning impact is otherwise similar.
+Dr Tu wants to take {num_days} consecutive CALENDAR days off as leave (not just business days), \
+potentially travelling overseas (see the travel note above - factor in an overnight/redeye flight \
+plan rather than assuming a full extra day is lost on each end). Weekends already have no \
+scheduled work, so a window that includes a weekend gets "free" rest days that cost nothing in \
+earnings - always prefer a window that overlaps a Saturday/Sunday over one that doesn't, if the \
+earning impact is otherwise similar.
 
 Below is the $-earning and session-count breakdown for every weekday within each of the 4 \
 rotation weeks (based on data from: {period_label}). Because the rotation repeats, this tells you \
@@ -118,12 +135,22 @@ calendar date it next falls on.
 rotation_weeks (JSON):
 {json.dumps(rotation_weeks, indent=2)}
 
-Task: recommend which specific run of {num_days} consecutive calendar days (naming it by rotation \
-week + weekday, e.g. "Thursday of Week 3 through Monday of Week 4", and noting it overlaps a \
-weekend where applicable) would have the LOWEST total earning impact if taken as leave. State the \
-total $ impact of your top recommendation, then give 1-2 alternative windows ranked below it. Be \
-concise and concrete - this is a practical scheduling decision, not a report."""
-    return _ask(api_key, prompt, max_tokens=1800)
+Task: recommend which specific run of {num_days} consecutive calendar days would have the LOWEST \
+total earning impact if taken as leave (with a couple of alternatives too). For your TOP pick and \
+EACH alternative, present it in exactly this structure, in markdown:
+
+### Option N: <short label>
+- **Dates/times:** the exact window by rotation week + weekday (e.g. "Thursday PM of Week 3 \
+through Monday AM of Week 4"), including a suggested flight plan if travel is plausible (e.g. \
+"work Thursday PM as normal, fly out that evening (overnight to somewhere like Taipei); return \
+flight lands early Monday, still make Monday PM").
+- **Reason:** why this window - which specific low-earning days it captures and how much weekend/\
+overnight-travel overlap reduces the real cost.
+- **Loss of income:** the total $ impact, broken down by which day(s) actually get sacrificed.
+
+List the top pick first, then 1-2 alternatives in the same structure, clearly labelled as \
+alternatives. Be concise and concrete - this is a practical scheduling decision, not a report."""
+    return _ask(api_key, prompt, max_tokens=2200)
 
 
 def suggest_shore_expansion_tradeoff(api_key, group_breakdown, site_breakdown, pipelines, extra_sessions, period_label):
