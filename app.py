@@ -83,6 +83,8 @@ SCOPE_SITES = ['CDD', 'Mater', 'ESPH', 'Freshwater', 'Dee Why']
 # that genuinely straddles two groups: its Clinic sessions are "SHORE Gastroenterology"
 # but its Scope sessions are "Scopes" - so classification must check activity first.
 GROUP_ORDER = ['FORHEALTH Medical Centre', 'SHORE Gastroenterology', 'CDD', 'Scopes']
+WEEKDAY_ORDER = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday']
+ROTATION_LABELS = ['Week 1', 'Week 2', 'Week 3', 'Week 4']
 
 
 def classify_group(category, activity):
@@ -546,8 +548,14 @@ def _compute_analysis(db, period):
     site_counts, site_totals = {}, {}
     site_activity_counts, site_activity_totals = {}, {}
     group_counts, group_totals = {}, {}
-    weekly_totals = {}
     total_sessions, total_revenue = 0, 0.0
+
+    # Rotation-week breakdown (Week 1-4) rather than calendar-week-starting dates: the
+    # rotation label is stable across months/years, so this is the useful frame for
+    # comparing "how does Week 3 perform" over time, unlike shifting calendar dates.
+    rotation = {label: {'sessions': 0, 'value': 0.0,
+                         'days': {w: {'sessions': 0, 'value': 0.0} for w in WEEKDAY_ORDER}}
+                for label in ROTATION_LABELS}
 
     for r in rows:
         rate = rate_map.get((r['location_id'], r['activity']))
@@ -568,10 +576,16 @@ def _compute_analysis(db, period):
         total_revenue += value
 
         d = datetime.date.fromisoformat(r['date'])
-        monday = (d - datetime.timedelta(days=d.weekday())).isoformat()
-        wk = weekly_totals.setdefault(monday, {'sessions': 0, 'value': 0.0})
-        wk['sessions'] += 1
-        wk['value'] += value
+        monday = d - datetime.timedelta(days=d.weekday())
+        weekday_name = d.strftime('%A')
+        if weekday_name in WEEKDAY_ORDER:
+            wk = rotation[week_rotation_label(monday)]
+            wk['sessions'] += 1
+            wk['value'] += value
+            wk['days'][weekday_name]['sessions'] += 1
+            wk['days'][weekday_name]['value'] += value
+
+    rotation_weeks = [{'label': label, **rotation[label]} for label in ROTATION_LABELS]
 
     site_breakdown = []
     for site, rev in sorted(site_totals.items(), key=lambda x: -x[1]):
@@ -638,7 +652,7 @@ def _compute_analysis(db, period):
         'site_breakdown': site_breakdown,
         'group_breakdown': group_breakdown,
         'flags': flags,
-        'weekly': sorted(weekly_totals.items()),
+        'rotation_weeks': rotation_weeks,
         'scope_sessions': scope_sessions,
         'consult_sessions': consult_sessions,
         'scope_revenue': scope_revenue,

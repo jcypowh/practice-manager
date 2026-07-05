@@ -102,12 +102,19 @@
 <p class="text-muted">No flags at current thresholds (adjust in Settings).</p>
 {% endif %}
 
-<h5>Weekly totals</h5>
+<h5>Weekly rotation breakdown (Week 1-4)</h5>
+<p class="text-muted small">Based on the practice's perpetual 4-week rotation, not calendar dates - so this stays a stable, comparable frame across different months/years. Each week's total is the sum of every time that rotation slot occurred within {{ data.period_label }}; the daily figures below show where in the week the earning actually happens.</p>
 <table class="table table-sm bg-white">
-  <thead><tr><th>Week starting</th><th>Sessions</th><th>Total $</th></tr></thead>
+  <thead><tr><th>Week</th><th>Mon</th><th>Tue</th><th>Wed</th><th>Thu</th><th>Fri</th><th>Week total</th></tr></thead>
   <tbody>
-    {% for wk, v in data.weekly %}
-    <tr><td>{{ wk }}</td><td>{{ v.sessions }}</td><td>${{ '%.2f'|format(v.value) }}</td></tr>
+    {% for w in data.rotation_weeks %}
+    <tr>
+      <td><strong>{{ w.label }}</strong></td>
+      {% for wd in ['Monday','Tuesday','Wednesday','Thursday','Friday'] %}
+      <td>${{ '%.0f'|format(w.days[wd].value) }}<br><small class="text-muted">{{ w.days[wd].sessions }} session{{ 's' if w.days[wd].sessions != 1 else '' }}</small></td>
+      {% endfor %}
+      <td><strong>${{ '%.0f'|format(w.value) }}</strong><br><small class="text-muted">{{ w.sessions }} sessions</small></td>
+    </tr>
     {% endfor %}
   </tbody>
 </table>

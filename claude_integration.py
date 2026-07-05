@@ -33,7 +33,7 @@ def narrative_analysis(api_key, data):
         'group_breakdown': data['group_breakdown'],
         'site_breakdown': data['site_breakdown'],
         'flags': data['flags'],
-        'weekly_totals': [{'week_starting': w, **v} for w, v in data['weekly']],
+        'rotation_weeks': data['rotation_weeks'],
         'consult_scope_session_ratio': data['consult_scope_ratio'],
         'referral_pipelines': data['pipelines'],
     }
@@ -61,14 +61,20 @@ referrals - something like 10 consults generating only 1 scope booking would be 
 many consults not converting into procedures). Comment specifically on whether each pipeline's \
 ratio (source sessions : target sessions, given in `referral_pipelines`) looks healthy or concerning.
 
+`rotation_weeks` breaks the data down by the practice's perpetual 4-week rotation (Week 1-4, \
+which repeats regardless of calendar month/year - NOT the same as calendar week-of-year), with \
+a Monday-Friday breakdown inside each. Use this to flag if a particular rotation week or weekday \
+is consistently under/over-performing.
+
 Data (JSON):
 {json.dumps(payload, indent=2)}
 
 Write a concise practical analysis in markdown with these sections: "Summary", "Revenue mix" \
 (comment on the FORHEALTH vs SHORE vs CDD vs Scopes split and what it means for income direction), \
 "Referral pipeline health" (comment specifically on both pipeline ratios using the logic above), \
-"Concerns" (utilization flags), and "Recommendations". Be specific, reference real site names and \
-numbers from the data. Keep it under 500 words."""
+"Weekly rotation pattern" (any Week 1-4 or weekday-of-week pattern worth flagging, from \
+`rotation_weeks`), "Concerns" (utilization flags), and "Recommendations". Be specific, reference \
+real site/week names and numbers from the data. Keep it under 550 words."""
     resp = client.messages.create(
         model=NARRATIVE_MODEL,
         max_tokens=1500,
